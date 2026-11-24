@@ -830,7 +830,9 @@ def make_nodes(
                         single_source_warning=ver.single_source_warning,
                     )
                 )
-                if ver.numeric_context or re.search(r"\d", claim.statement):
+                if ver.numeric_context or re.search(
+                    r"\d", re.sub(r"\b(?:19|20)\d{2}\b", "", claim.statement)
+                ):
                     cites = " ".join(f"[{sid}]" for sid in cite_ids)
                     ctx = f" — Bağlam: {ver.numeric_context}" if ver.numeric_context else ""
                     quantitative_comparisons.append(
@@ -879,6 +881,19 @@ def make_nodes(
             | {c.side_b.source_id for c in conflicts}
             | {ev.source_id for lim in limitations for ev in lim.counter_evidence}
         )
+        if referenced_sids:
+            bib_sources = [
+                s for s in state["sources"] if s.is_mock or s.source_id in referenced_sids
+            ]
+        else:
+            bib_sources = [
+                s
+                for s in state["sources"]
+                if s.is_mock or (s.is_accessible and s.relevance_score >= 0.2)
+            ]
+            bib_sources.sort(key=lambda s: (-s.relevance_score, -s.credibility_score))
+            bib_sources = bib_sources[:3]
+
         bibliography = [
             BibliographyItem(
                 source_id=s.source_id,
@@ -899,20 +914,13 @@ def make_nodes(
                 is_accessible=s.is_accessible,
                 duplicate_of_source_id=s.duplicate_of_source_id,
             )
-            for s in state["sources"]
-            if s.is_mock
-            or s.source_id in referenced_sids
-            or (s.is_accessible and s.relevance_score >= 0.2)
+            for s in bib_sources
         ]
 
         updated_sqs = [sq.model_copy() for sq in state["sub_questions"]]
         open_questions: list[str] = []
         clean_q = clean_question_title(state["question"])
-        title = (
-            f"Araştırma Raporu: {clean_q}"
-            if lang == "tr"
-            else f"Research Report: {clean_q}"
-        )
+        title = clean_q
         short_answer = ""
         overall_assessment = ""
         usage_delta = UsageDelta(model_calls=0)

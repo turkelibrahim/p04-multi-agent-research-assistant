@@ -1,4 +1,4 @@
-"""Streamlit AppTest ile uçtan uca arayüz, doğrulama, [S2] atlama ve geçmiş testleri."""
+"""Streamlit AppTest ile uçtan uca arayüz, doğrulama, [S2] atlama, geçmiş ve silme testleri."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def test_ui_validation_offline_demo_jump_and_history(tmp_path, monkeypatch):
     assert repo.list_runs() == []
 
     # 2) Sınıf demosu standart modda çalıştırılır (K01 / K03 / K04 / K05)
-    at.button[0].click().run()  # "Örneği Forma Doldur" -> varsayılan Kütüphane Pilotu
+    at.button(key="fill_preset_btn").click().run()
     start_btn = next(b for b in at.button if b.label == "Araştırmayı Başlat")
     start_btn.click().run()
     assert not at.exception
@@ -41,18 +41,25 @@ def test_ui_validation_offline_demo_jump_and_history(tmp_path, monkeypatch):
     dl_buttons = at.get("download_button")
     assert len(dl_buttons) == 2
 
-    # 3) Rapordaki [S2] düğmesine basınca Kanıt ve Kaynak Ayrıntısı'na geçip S2 + C2 zincirini gösterir
+    # 3) Rapordaki [S2] düğmesine basınca Kaynaklar ekranına geçip S2 kartını seçer
     s2_btn = next(b for b in at.button if "[S2]" in b.label)
     s2_btn.click().run()
     assert not at.exception
-    assert at.session_state["active_view"] == "Kanıt ve Kaynak Ayrıntısı"
+    assert at.session_state["active_view"] == "Kaynaklar"
     assert at.session_state["selected_source_id"] == "S2"
 
     # 4) Geçmiş ekranından aynı raporu yeniden yüklemek yeni koşum başlatmaz (K08)
-    at.radio(key="active_view").set_value("Geçmiş ve Dışa Aktarım").run()
+    at.radio(key="active_view").set_value("Geçmiş").run()
     assert not at.exception
     open_hist_btn = next(b for b in at.button if b.label == "Raporu Aç")
     open_hist_btn.click().run()
     assert not at.exception
     assert at.session_state["active_view"] == "Rapor"
     assert len(repo.list_runs()) == 1
+
+    # 5) Geçmiş ekranından rapor silindiğinde veritabanından kaldırılır
+    at.radio(key="active_view").set_value("Geçmiş").run()
+    del_btn = next(b for b in at.button if b.label == "Sil")
+    del_btn.click().run()
+    assert not at.exception
+    assert repo.list_runs() == []

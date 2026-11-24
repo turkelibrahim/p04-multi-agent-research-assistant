@@ -133,3 +133,34 @@ def test_simulated_db_failure_keeps_in_session_report(app_config, tmp_path):
     assert persist_err is not None
     assert bundle.report is not None
     assert "8 dakikadan 6 dakikaya" in bundle.report.short_answer
+
+
+def test_delete_run_with_duplicate_sources_and_claims(app_config, repo):
+    b_dup, ok1, _ = execute_research_run(
+        question=DEMO_PRESETS[3].default_question_tr,
+        language="tr",
+        depth="standard",
+        mode="demo",
+        config=app_config,
+        repository=repo,
+    )
+    b_std, ok2, _ = execute_research_run(
+        question=DEMO_PRESETS[0].default_question_tr,
+        language="tr",
+        depth="standard",
+        mode="demo",
+        config=app_config,
+        repository=repo,
+    )
+    assert ok1 and ok2
+    assert len(repo.list_runs()) == 2
+
+    deleted = repo.delete_run(b_dup.metadata.run_id)
+    assert deleted is True
+    remaining = repo.list_runs()
+    assert len(remaining) == 1
+    assert remaining[0]["run_id"] == b_std.metadata.run_id
+
+    cleared = repo.clear_all_runs()
+    assert cleared == 1
+    assert repo.list_runs() == []

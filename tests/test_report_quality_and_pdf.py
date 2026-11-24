@@ -104,18 +104,16 @@ def test_all_twelve_report_sections_and_coherent_synthesis(app_config):
     md = bundle.report.report_markdown
     for heading in (
         "## Kısa Yanıt",
-        "## Araştırma Amacı",
-        "## Yöntem ve Kapsam",
-        "## Alt Araştırma Soruları",
         "## Temel Bulgular",
-        "## Sayısal Veriler ve Karşılaştırmalar",
-        "## Karşıt Kanıtlar",
-        "## Sınırlılıklar",
-        "## Genel Değerlendirme",
-        "## Açık Sorular",
         "## Kaynakça",
     ):
         assert heading in md
+
+    # Açık URL hiçbir yerde çıplak metin olarak görünmemeli (yalnızca Markdown bağlantı hedefinde yer almalı)
+    import re
+
+    md_without_targets = re.sub(r"\[[^\]]+\]\(https?://[^)]+\)", "", md)
+    assert "http://" not in md_without_targets and "https://" not in md_without_targets
 
 
 def test_pdf_long_title_long_url_empty_table_and_multipage(app_config):
@@ -157,7 +155,11 @@ def test_pdf_long_title_long_url_empty_table_and_multipage(app_config):
                         title=f"2026 Yapay Zekâ Ajanları Kurumsal İnceleme {i}",
                         publisher=f"Üniversite Enstitüsü {i}",
                         author=f"Dr. Araştırmacı {i}",
-                        content=f"2026 yılı {i}. saha çalışmasında (n={100 + i * 10} şirket) yapay zekâ ajanları operasyonel süreç süresini %{20 + i} iyileştirdi.",
+                        content=(
+                            f"2026 yılı {i}. saha çalışmasında (n={100 + i * 10} şirket) yapay zekâ ajanları "
+                            f"operasyonel süreç süresini %{20 + i} iyileştirdi. "
+                            f"Bu bulgu {i}. bölüm kapsamında kapsamlı çalışan anketi ve süreç ölçümüyle doğrulanmıştır."
+                        ),
                         published_date=None if i % 2 == 0 else f"2026-0{(i % 9) + 1}-15",
                         provider="mock_many",
                         is_mock=False,
@@ -170,20 +172,44 @@ def test_pdf_long_title_long_url_empty_table_and_multipage(app_config):
     bundle_many, _, _ = execute_research_run(
         question="2026 yılında yapay zekâ ajanlarının kurumsal süreç süresine etkisi nedir?",
         language="tr",
-        depth="fast",
+        depth="standard",
         mode="live",
         config=app_config,
         llm_provider=ExtractiveLiveLLMProvider(),
         search_provider=ManySourcesSearch(),
     )
+    # Çok sayfalı PDF tablo bölünmesini test etmek için 14 kaynağın tamamını kaynakçaya yansıt
+    from p04_research.models import BibliographyItem
+
+    bundle_many.report.bibliography = [
+        BibliographyItem(
+            source_id=s.source_id,
+            title=f"{s.title} — Uzun Başlık ve Kurumsal Değerlendirme Bölümü",
+            publisher=s.publisher,
+            author=s.author,
+            published_date=s.published_date,
+            retrieved_at=s.retrieved_at,
+            url=s.url,
+            language=s.language,
+            provider=s.provider,
+            is_mock=s.is_mock,
+            evidence_level=s.evidence_level,
+            source_type=s.source_type,
+            retrieval_method=s.retrieval_method,
+        )
+        for s in bundle_many.sources
+    ]
+    bundle_many.report.report_markdown = render_report_markdown(bundle_many)
+
     pdf_many = render_report_pdf_bytes(bundle_many)
     reader = PdfReader(BytesIO(pdf_many))
     assert len(reader.pages) >= 2
     full_txt = "\n".join(p.extract_text() or "" for p in reader.pages)
     assert "Sayfa 1" in full_txt and "Sayfa 2" in full_txt
     assert "Bilinmiyor" in full_txt
+    assert "https://" not in full_txt
     md_many = render_report_markdown(bundle_many)
-    assert "Yayın Tarihi" in md_many and "Erişim Tarihi" in md_many
+    assert "Tarih:" in md_many and "Bilinmiyor" in md_many
 
 
 def test_six_diverse_research_scenarios(app_config):
@@ -214,3 +240,51 @@ def test_six_diverse_research_scenarios(app_config):
     assert len(b_conf.report.conflicts) == 1
     assert b_zero.report.research_quality == "insufficient_evidence"
     assert not b_long.report.title.endswith("...")
+
+
+def test_publisher_tlds_markdown_cleanup_abbreviations_and_multiagent_planner():
+    from p04_research.export.markdown_export import (
+        clean_publisher_name,
+        clean_report_title,
+        is_statement_duplicate_of_quote,
+    )
+    from p04_research.providers.live_extractive import _extract_verbatim_sentences
+
+    # 1) .eu / .de alan adları 'Eu' / 'De' olarak dönmemeli
+    assert clean_publisher_name("blog.example.eu", url="https://blog.example.eu/multi-agent") == "Example"
+    assert clean_publisher_name("techportal.de", url="https://techportal.de/single-vs-multi") == "Techportal"
+    assert clean_publisher_name("mindstudio.ai", url="https://www.mindstudio.ai/post") == "MindStudio"
+
+    # 2) Çok cümleli uzun istemde ilk cümle başlık olmalı; tek cümleli uzun soru kesilmemeli
+    multi_q = (
+        "Çok ajanlı yapay zekâ sistemleri, tek ajanlı sistemlere kıyasla ne kadar başarılıdır? "
+        "Bu sistemleri doğruluk ve maliyet açısından karşılaştır. Gelecek potansiyelini değerlendir."
+    )
+    assert clean_report_title(multi_q) == "Çok ajanlı yapay zekâ sistemleri, tek ajanlı sistemlere kıyasla ne kadar başarılıdır?"
+    single_long_q = (
+        "2026 Yılında Kurumsal İşletmelerde Çok Ajanlı Yapay Zekâ Sistemlerinin Yazılım Geliştirme "
+        "ve Veri Analizi Üzerindeki Uzun Dönemli Etkileri Nelerdir?"
+    )
+    assert clean_report_title(single_long_q) == single_long_q
+
+    # 3) Markdown '### 5.4' ve 'e.g.' kırılması temizlenmeli
+    noisy = (
+        "### 5.4 Çoklu Ajan Sistemleri ve İşbirliği\n"
+        "Karmaşık görevler için farklı alanlarda uzmanlaşmış çoklu ajanların işbirliği yapması daha etkili olabilir.\n"
+        "Instead they collaborate in a peer-to-peer fashion, e.g. sharing tool outputs and verifying intermediate results."
+    )
+    sents = _extract_verbatim_sentences(noisy, question="çok ajanlı yapay zeka işbirliği")
+    assert sents
+    assert all(not s.startswith("###") for s in sents)
+    assert all(not s.endswith("e.g.") for s in sents)
+
+    # 4) Çok ajanlı vs tek ajanlı sorusu yanlışlıkla istihdam şablonunu tetiklememeli
+    ext = ExtractiveLiveLLMProvider()
+    plan, _ = ext.plan(multi_q, "tr", "standard", 3)
+    sq_texts = " ".join(sq.text.lower() for sq in plan.sub_questions)
+    assert "istihdam" not in sq_texts and "çalışan sayısındaki" not in sq_texts
+    assert "halüsinasyon" in sq_texts and "doğruluk" in sq_texts
+
+    # 5) Aynı cümle bulgu + alıntı olarak çift yazılmamalı
+    stmt = "Artık tüm görevleri tek bir büyük yapay zekâ modelinin üstlenmesine güvenmek yerine ekipler uzman ajanlar kullanıyor."
+    assert is_statement_duplicate_of_quote(stmt, stmt) is True

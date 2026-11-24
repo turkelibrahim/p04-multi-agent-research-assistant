@@ -640,3 +640,49 @@ class ResearchRepository:
             final_verification=final_ver,
             all_verifications=all_vers,
         )
+
+    def delete_run(self, run_id: str) -> bool:
+        """Tek bir araştırma kaydını ve bağlı tüm alt tabloları atomik olarak siler."""
+        self.ensure_initialized()
+        with closing(get_connection(self.db_path)) as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                conn.execute("DELETE FROM verification_evidence WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM verifications WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM claims WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM evidence_chunks WHERE run_id = ?", (run_id,))
+                conn.execute("UPDATE sources SET duplicate_of_source_id = NULL WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM sources WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM search_rounds WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM sub_questions WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM reports WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM run_events WHERE run_id = ?", (run_id,))
+                cur = conn.execute("DELETE FROM research_runs WHERE run_id = ?", (run_id,))
+                conn.commit()
+                return cur.rowcount > 0
+            except Exception:
+                conn.rollback()
+                raise
+
+    def clear_all_runs(self) -> int:
+        """Veritabanındaki tüm araştırma kayıtlarını güvenli yabancı anahtar sırasıyla temizler."""
+        self.ensure_initialized()
+        with closing(get_connection(self.db_path)) as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                conn.execute("DELETE FROM verification_evidence")
+                conn.execute("DELETE FROM verifications")
+                conn.execute("DELETE FROM claims")
+                conn.execute("DELETE FROM evidence_chunks")
+                conn.execute("UPDATE sources SET duplicate_of_source_id = NULL")
+                conn.execute("DELETE FROM sources")
+                conn.execute("DELETE FROM search_rounds")
+                conn.execute("DELETE FROM sub_questions")
+                conn.execute("DELETE FROM reports")
+                conn.execute("DELETE FROM run_events")
+                cur = conn.execute("DELETE FROM research_runs")
+                conn.commit()
+                return int(cur.rowcount or 0)
+            except Exception:
+                conn.rollback()
+                raise

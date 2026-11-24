@@ -39,7 +39,9 @@ from p04_research.verification_rules import (
     normalize_whitespace_nfc,
 )
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<!e\.g)(?<!i\.e)(?<!\bvs)(?<!\bDr)(?<!\bProf)(?<!\bvb)(?<!\börn)(?<!\bMr)(?<!\bMs)(?<!\betc)(?<=[.!?])\s+"
+)
 _SPECULATIVE_TOKENS = (
     "olabilir",
     "bekleniyor",
@@ -60,15 +62,23 @@ _DATE_TOKEN_RE = re.compile(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b|\b\d{4}-\d{2}-
 _READING_TIME_RE = re.compile(
     r"\b\d+\s*(?:dakikalık\s+okuma|dk\.?\s*okuma|min(?:ute)?\s+read)\b", re.IGNORECASE
 )
-_SNIPPET_PREFIX_RE = re.compile(r"^(?:\[\.{3}\]|\.{3}|…|\s*[-–—|•])+\s*")
+_SNIPPET_PREFIX_RE = re.compile(r"^(?:\[\.{3}\]|\.{3}|…|\s*[-–—|•*])+\s*")
+_MD_HEADING_PREFIX_RE = re.compile(r"^(?:#{1,6}\s+(?:\d+(?:\.\d+)*\.?\s+)?|>\s*)")
 _META_HEADER_RE = re.compile(
-    r"^(?:İçgörü\s*[-–—]\s*Görüş|Görüş|Haber|Analiz|Blog)\s+(?:\d+\s+dakikalık\s+okuma\s*)?(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s*)?",
+    r"^(?:İçgörü\s*[-–—]\s*Görüş|Görüş|Haber|Analiz|Blog|Paylaş|Abone\s+Ol)\s*"
+    r"(?:\d+\s+dakikalık\s+okuma\s*)?(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s*)?",
     re.IGNORECASE,
 )
+_SHARE_NOISE_TAIL_RE = re.compile(
+    r"(?:Paylaş(?:\s+\d+)?|Facebook|Twitter|Linkedin|LinkedIn|E-posta\s+gönder|Bağlantıyı\s+kopyala)\b",
+    re.IGNORECASE,
+)
+_INCOMPLETE_END_RE = re.compile(r"(?:\b(?:e\.g|i\.e|vs|vb|örn|etc)\.|[:,;])$", re.IGNORECASE)
 _NUMERIC_RE = re.compile(
-    r"(\%\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*%|\b202[4-9]\b|\b\d+(?:[.,]\d+)?\s*(?:milyar|milyon|bin|kat|kişi|şirket|çalışan|iş|billion|million|thousand|x)\b)",
+    r"(\%\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*%|\b\d+(?:[.,]\d+)?\s*(?:milyar|milyon|bin|kat|kişi|şirket|çalışan|iş|billion|million|thousand|x)\b)",
     re.IGNORECASE,
 )
+
 
 try:
     _TIKTOKEN_ENC = tiktoken.get_encoding("cl100k_base")
@@ -85,61 +95,74 @@ def _count_tokens(text: str) -> int:
 
 
 def _extract_verbatim_sentences(text: str, question: str = "") -> list[str]:
-    """Kaynak metninden birebir eşleşen, soru cümlesi olmayan anlamlı cümleleri çıkarır."""
+    """Kaynak metninden birebir eşleşen, Markdown başlıkları ve yarım cümlelerden arındırılmış cümleleri çıkarır."""
     norm = normalize_whitespace_nfc(text)
     if not norm:
         return []
-    raw_parts = _SENTENCE_SPLIT_RE.split(norm)
+
+    raw_lines = [ln.strip() for ln in re.split(r"[\r\n]+", text or "") if ln.strip()]
+    raw_parts: list[str] = []
+    for ln in raw_lines:
+        ln_norm = normalize_whitespace_nfc(ln)
+        if not ln_norm:
+            continue
+        # Tek başına Markdown başlık satırlarını atla; satır içinde cümle varsa önekini ayır
+        if ln_norm.startswith("#") and not re.search(r"[.!?]", ln_norm):
+            continue
+        raw_parts.extend(_SENTENCE_SPLIT_RE.split(ln_norm))
+
     candidates: list[str] = []
+    seen: set[str] = set()
     for part in raw_parts:
         s = part.strip()
-        for _ in range(3):
-            cleaned = _SNIPPET_PREFIX_RE.sub("", s).strip()
+        for _ in range(4):
+            cleaned = _MD_HEADING_PREFIX_RE.sub("", s).strip()
+            cleaned = _SNIPPET_PREFIX_RE.sub("", cleaned).strip()
             cleaned = _META_HEADER_RE.sub("", cleaned).strip()
             cleaned = _SNIPPET_PREFIX_RE.sub("", cleaned).strip()
             if cleaned == s:
                 break
             s = cleaned
-        if s.endswith("?"):
+        # Sosyal medya / paylaşım düğmesi ön eklerini birebir alt-dizeyi koruyarak atla
+        last_share = None
+        for m in _SHARE_NOISE_TAIL_RE.finditer(s):
+            last_share = m
+        if last_share is not None:
+            tail = s[last_share.end() :].strip(" -–—|:•")
+            if len(tail) >= 45 and tail in norm:
+                s = tail
+        if s.endswith("?") or _INCOMPLETE_END_RE.search(s):
             continue
-        if 45 <= len(s) <= 340 and s in norm and " " in s:
+        if 45 <= len(s) <= 340 and s in norm and " " in s and s not in seen:
+            seen.add(s)
             candidates.append(s)
+
     if not candidates and len(norm) >= 40 and not norm.endswith("?"):
         snippet = norm[: min(260, len(norm))].rsplit(" ", 1)[0].strip()
-        if len(snippet) >= 35 and snippet in norm and not snippet.endswith("?"):
+        if len(snippet) >= 35 and snippet in norm and not snippet.endswith("?") and not _INCOMPLETE_END_RE.search(snippet):
             candidates.append(snippet)
 
-    def _rank_key(s: str) -> tuple[int, float, int, int]:
+    def _rank_key(s: str) -> tuple[int, int, int, float, int, int]:
+        has_md_noise = 1 if ("#" in s or "```" in s) else 0
+        has_share_noise = 1 if _SHARE_NOISE_TAIL_RE.search(s) else 0
         has_noise = 1 if ("..." in s or "[...]" in s or _READING_TIME_RE.search(s)) else 0
         rel, _ = compute_topical_relevance(question, s) if question else (1.0, "")
         num_scan = _READING_TIME_RE.sub("", _DATE_TOKEN_RE.sub("", s))
         has_num = 0 if _NUMERIC_RE.search(num_scan) else 1
-        return (has_noise, -rel, has_num, -len(s))
+        return (has_md_noise, has_share_noise, has_noise, -rel, has_num, -len(s))
 
     candidates.sort(key=_rank_key)
     return candidates
 
 
 def _summarize_claim_statement(quote: str, src: SourceRecord | None, is_tr: bool) -> str:
-    """Alıntıdan tekrarsız, bağlam içeren bir iddia özeti üretir."""
-    pub = src.publisher if (src and src.publisher) else ("Kaynak" if is_tr else "Source")
-    num_scan = _READING_TIME_RE.sub("", _DATE_TOKEN_RE.sub("", quote))
-    nums = _NUMERIC_RE.findall(num_scan)
-    clean_q = quote.strip().rstrip(".")
-    short_q = (
-        clean_q[:135].rsplit(" ", 1)[0].rstrip(",;:") + "..."
-        if len(clean_q) > 135
-        else clean_q
-    )
-
-    if nums:
-        metric_tag = ", ".join(dict.fromkeys(n.strip() for n in nums[:2]))
-        return (
-            f"{pub} verisi ({metric_tag}): {short_q}."
-            if is_tr
-            else f"{pub} data ({metric_tag}): {short_q}."
-        )
-    return f"{pub} bulgusu: {short_q}." if is_tr else f"{pub} finding: {short_q}."
+    """Alıntıyı ortasından bölmeden eksiksiz, sade bir bulgu cümlesi olarak döndürür."""
+    del src, is_tr
+    clean_q = quote.strip().rstrip(".!?… ")
+    if len(clean_q) > 280:
+        short_q = clean_q[:280].rsplit(" ", 1)[0].rstrip(",;: ") + "..."
+        return short_q
+    return f"{clean_q}."
 
 
 def _build_academic_synthesis(
@@ -181,30 +204,35 @@ def _build_academic_synthesis(
     paragraphs: list[str] = []
     if not supported and not conflicting and not contradicted:
         short = (
-            f"'{clean_q}' sorusu kapsamında taranan {len(sources)} kaynaktan doğrulama kurallarını geçen kesin bir bulgu elde edilememiştir. "
-            "Mevcut kayıtlar ya soruyla doğrudan ilişkili ölçüm sunmamakta ya da doğrulanmamış tahminlerden oluşmaktadır."
+            f"İncelenen {len(sources)} kaynak arasında doğrulama ölçütlerini geçen kesin bir bulgu bulunamadı. "
+            "Mevcut kayıtlar soruyla doğrudan ilişkili ölçüm sunmamakta veya doğrulanmamış tahminlerden oluşmaktadır."
             if is_tr
-            else f"Across {len(sources)} inspected sources for '{clean_q}', no findings passed all evidence verification criteria."
+            else f"Across {len(sources)} inspected sources, no findings passed verification criteria."
         )
         assessment = (
-            "Kanıt düzeyi yetersizdir; karar verebilmek için örneklem ve kapsamı tanımlı birincil ölçümler gereklidir."
+            "Kanıt düzeyi yetersizdir; örneklem ve kapsamı tanımlı birincil ölçümler gereklidir."
             if is_tr
             else "Evidence is insufficient; primary measurements with defined samples and scope are needed."
         )
         return short, assessment
 
-    # 1. Doğrudan soruya yanıt ve doğrulanmış bulgular sentezi
+    # 1. Doğrudan yanıt ve doğrulanmış bulgular sentezi
     if conflicting:
         c_claim, c_ver = conflicting[0]
         sids = " ve ".join(f"[{e.source_id}]" for e in c_ver.evidence_items[:2])
         paragraphs.append(
-            f"'{clean_q}' sorusunda {sids} kaynakları aynı kapsam için çelişkili bulgular sunduğundan tekil bir kesin hüküm kurulmamıştır."
+            f"İncelenen {sids} kaynakları aynı kapsamda çelişkili ölçümler sunduğu için tekil bir kesin hüküm kurulmamıştır."
             if is_tr
-            else f"For '{clean_q}', sources {sids} report conflicting measurements for the same scope, preventing a single definitive ruling."
+            else f"Sources {sids} report conflicting measurements for the same scope, preventing a single definitive ruling."
         )
     elif supported:
-        top_items = supported[:3]
-        synth_clauses: list[str] = []
+        # Hedef dildeki bulguları öne al ve tam, kesilmemiş cümlelerle özetle
+        ordered_supported = sorted(
+            supported,
+            key=lambda pair: 0 if pair[0].initial_quote_language == language else 1,
+        )
+        top_items = ordered_supported[:3]
+        synth_sentences: list[str] = []
         seen_stmt: set[str] = set()
         for clm, ver in top_items:
             cite_ids = []
@@ -212,28 +240,27 @@ def _build_academic_synthesis(
                 if ev.source_id not in cite_ids:
                     cite_ids.append(ev.source_id)
             cites = " ".join(f"[{sid}]" for sid in (cite_ids or [clm.initial_source_id]))
-            core = clm.statement.strip().rstrip(".")
-            if core in seen_stmt:
+            raw_core = clm.statement.strip()
+            if raw_core in seen_stmt:
                 continue
-            seen_stmt.add(core)
-            if ver.numeric_context:
-                synth_clauses.append(f"{core} ({ver.numeric_context}) {cites}")
+            seen_stmt.add(raw_core)
+            if raw_core.endswith("..."):
+                core = raw_core
+                end_punct = ""
             else:
-                synth_clauses.append(f"{core} {cites}")
+                core = raw_core.rstrip(".!? ")
+                end_punct = "."
+            if ver.numeric_context:
+                synth_sentences.append(f"{core} ({ver.numeric_context}) {cites}{end_punct}")
+            else:
+                synth_sentences.append(f"{core} {cites}{end_punct}")
 
-        if is_tr:
-            paragraphs.append(
-                f"'{clean_q}' sorusuna yönelik {len(sources)} kaynak üzerinden yürütülen denetimde "
-                f"{len(supported)} bulgu doğrudan kanıtlarla desteklenmiştir: "
-                + "; ".join(synth_clauses)
-                + "."
-            )
-        else:
-            paragraphs.append(
-                f"Evaluation of {len(sources)} sources for '{clean_q}' verified {len(supported)} findings: "
-                + "; ".join(synth_clauses)
-                + "."
-            )
+        intro = (
+            f"İncelenen {len(sources)} kaynaktan {len(supported)} bulgu doğrulandı."
+            if is_tr
+            else f"Verified {len(supported)} findings across {len(sources)} inspected sources."
+        )
+        paragraphs.append(" ".join([intro, *synth_sentences]))
 
     # 2. Karşıt kanıt özeti
     if contradicted:
@@ -242,30 +269,30 @@ def _build_academic_synthesis(
         paragraphs.append(
             f"Buna karşın '{c_claim.statement.rstrip('.')}' iddiası {c_sids} kayıtlarındaki ölçümlerle çürütülmüştür."
             if is_tr
-            else f"Conversely, the claim '{c_claim.statement.rstrip('.')}' is contradicted by measurements in {c_sids}."
+            else f"Conversely, '{c_claim.statement.rstrip('.')}' is contradicted by measurements in {c_sids}."
         )
 
-    # 3. Belirsizlikler ve açık noktalar
+    # 3. Belirsizlikler
     if uncertain:
         irrel_cnt = sum(1 for _, v in uncertain if v.verdict == VerdictStatus.IRRELEVANT)
         insuff_cnt = len(uncertain) - irrel_cnt
         if is_tr:
             paragraphs.append(
-                f"Ek olarak, {insuff_cnt} iddia yeterli istatistiksel bağlam veya bağımsız doğrulama bulunmadığı için "
-                + (f"ve {irrel_cnt} iddia konu/zaman uyumsuzluğu nedeniyle " if irrel_cnt else "")
-                + "kesin bulgulara dahil edilmeyip sınırlılıklar bölümünde raporlanmıştır."
+                f"{insuff_cnt} iddia yeterli istatistiksel bağlam bulunmadığı için"
+                + (f" ve {irrel_cnt} iddia konu/zaman uyumsuzluğu nedeniyle" if irrel_cnt else "")
+                + " sınırlılıklar bölümünde tutuldu."
             )
         else:
             paragraphs.append(
-                f"Additionally, {insuff_cnt} insufficient claims "
-                + (f"and {irrel_cnt} irrelevant claims " if irrel_cnt else "")
-                + "were excluded from verified findings and documented under limitations."
+                f"{insuff_cnt} insufficient claims"
+                + (f" and {irrel_cnt} irrelevant claims" if irrel_cnt else "")
+                + " were retained under limitations."
             )
 
+    del clean_q
     short_answer = " ".join(paragraphs)
     assessment = (
-        f"Toplam {len(sources)} kaynak denetlenmiş, {len(supported)} destekli bulgu ve {len(contradicted)} karşıt bulgu doğrulanmıştır; "
-        f"tek kaynağa dayalı bulgularda ikinci bağımsız doğrulama önerilir."
+        f"Toplam {len(sources)} kaynak denetlenmiş, {len(supported)} destekli bulgu ve {len(contradicted)} karşıt bulgu doğrulanmıştır."
         if is_tr
         else f"Audited {len(sources)} sources yielding {len(supported)} supported and {len(contradicted)} contradicted findings."
     )
@@ -287,7 +314,80 @@ class ExtractiveLiveLLMProvider:
         is_std = depth == "standard"
         q_low = clean_q.lower()
 
-        if any(k in q_low for k in ("yapay zek", "ajan", "iş dünyası", "çalışan", "ai agent", "workforce")):
+        is_workforce_q = any(
+            k in q_low for k in ("yapay zek", "ajan", "ai agent", "ai ")
+        ) and any(
+            k in q_low
+            for k in ("iş dünyası", "çalışan", "istihdam", "workforce", "employment", "yerini alabilir", "business")
+        )
+        is_multi_vs_single_q = any(
+            k in q_low for k in ("çok ajanlı", "çoklu ajan", "multi-agent", "multi agent")
+        ) and any(
+            k in q_low for k in ("tek ajanlı", "tek ajan", "single-agent", "single agent", "kıyasla", "karşılaştır", "compare")
+        )
+
+        if is_multi_vs_single_q:
+            sqs = [
+                PlannedSubQuestionLLM(
+                    sq_id="SQ1",
+                    text=(
+                        "Çok ajanlı sistemler karmaşık problemlerde doğruluk ve çözüm kalitesi açısından tek ajanlı sistemlere göre nasıl performans göstermektedir?"
+                        if is_tr
+                        else "How do multi-agent systems compare to single-agent systems in accuracy and complex problem solving?"
+                    ),
+                    scope_note="Doğruluk ve başarı oranı",
+                    search_intent="Multi-agent ve single-agent doğruluk kıyaslamalarını ve deneysel benchmark sonuçlarını topla",
+                    required_evidence="Deneysel değerlendirme veya akademik benchmark sonucu",
+                ),
+                PlannedSubQuestionLLM(
+                    sq_id="SQ2",
+                    text=(
+                        "İşlem süresi (gecikme), token tüketimi ve operasyonel maliyet farkları nelerdir?"
+                        if is_tr
+                        else "What are the latency, token consumption, and operational cost differences?"
+                    ),
+                    scope_note="Süre ve maliyet",
+                    search_intent="Çok ajanlı mimarilerin gecikme ve maliyet artışını/kazanımını incele",
+                    required_evidence="Ölçülmüş süre veya maliyet karşılaştırması",
+                ),
+                PlannedSubQuestionLLM(
+                    sq_id="SQ3",
+                    text=(
+                        "Güvenilirlik, kaynak doğrulama ve halüsinasyon oranı açısından hangi mimari daha avantajlıdır?"
+                        if is_tr
+                        else "Which architecture performs better on reliability, source verification, and hallucination rates?"
+                    ),
+                    scope_note="Güvenilirlik ve halüsinasyon",
+                    search_intent="Doğrulama adımları ve halüsinasyon azaltımı verilerini ara",
+                    required_evidence="Kaynak doğrulama veya halüsinasyon oranı çalışması",
+                ),
+            ]
+            if is_std:
+                sqs.extend([
+                    PlannedSubQuestionLLM(
+                        sq_id="SQ4",
+                        text=(
+                            "Gerçek dünya uygulamalarında ve akademik çalışmalarda çok ajanlı mimariler hangi alanlarda öne çıkmaktadır?"
+                            if is_tr
+                            else "Where do multi-agent architectures excel in real-world deployments and academic studies?"
+                        ),
+                        scope_note="Gerçek dünya ve akademik bulgular",
+                        search_intent="Üretim kullanımı ve akademik deney bulgularını topla",
+                        required_evidence="Vaka çalışması veya hakemli araştırma",
+                    ),
+                    PlannedSubQuestionLLM(
+                        sq_id="SQ5",
+                        text=(
+                            "Çok ajanlı yapay zekâ sistemlerinin mevcut sınırlılıkları ve gelecekteki gelişim potansiyeli nedir?"
+                            if is_tr
+                            else "What are the current limitations and future potential of multi-agent AI systems?"
+                        ),
+                        scope_note="Sınırlılıklar ve gelecek potansiyeli",
+                        search_intent="Koordinasyon zorlukları ve gelecek trendlerini derle",
+                        required_evidence="Teknik inceleme veya sistem analizi",
+                    ),
+                ])
+        elif is_workforce_q:
             sqs = [
                 PlannedSubQuestionLLM(
                     sq_id="SQ1",
@@ -309,7 +409,7 @@ class ExtractiveLiveLLMProvider:
                     ),
                     scope_note="İstihdam / kadro değişimi",
                     search_intent="İstihdam artışı, azalışı veya rol dönüşümü verilerini ara",
-                    required_evidence="Örneklem ve yılı belli istihdam istatistiği",
+                    required_evidence="Örneklem ve yılı belli istatistik",
                 ),
                 PlannedSubQuestionLLM(
                     sq_id="SQ3",
@@ -349,27 +449,27 @@ class ExtractiveLiveLLMProvider:
                     ),
                 ])
         else:
-            parts = [p.strip() for p in re.split(r"[:?]", clean_q) if len(p.strip()) >= 8]
+            parts = [p.strip() for p in re.split(r"[:?!.]\s+", clean_q) if len(p.strip()) >= 8]
             topic_main = parts[0] if parts else clean_q
-            topic_sub = parts[1] if len(parts) > 1 else clean_q
+            topic_sub = parts[1] if len(parts) > 1 else topic_main
             sqs = [
                 PlannedSubQuestionLLM(
                     sq_id="SQ1",
                     text=(
-                        f"{topic_main} konusunda birincil araştırmalar ve saha bulguları nelerdir?"
+                        f"{topic_main} konusunda birincil araştırmalar ve temel bulgular nelerdir?"
                         if is_tr
                         else f"What are the primary research findings regarding {topic_main}?"
                     ),
-                    scope_note="Güncel saha bulguları",
+                    scope_note="Temel bulgular",
                     search_intent="Ana konuyla doğrudan ilgili araştırmaları topla",
                     required_evidence="Birincil veya araştırma kuruluşu raporu",
                 ),
                 PlannedSubQuestionLLM(
                     sq_id="SQ2",
                     text=(
-                        f"{topic_sub} açısından ölçülmüş sayısal oranlar ve veriler nelerdir?"
+                        f"{topic_sub} açısından ölçülmüş sayısal oranlar ve karşılaştırmalar nelerdir?"
                         if is_tr
-                        else f"What quantitative rates and measurements exist for {topic_sub}?"
+                        else f"What quantitative rates and comparisons exist for {topic_sub}?"
                     ),
                     scope_note="Sayısal ölçüm ve bağlam",
                     search_intent="Paydası ve birimi belli istatistikleri çıkar",
@@ -402,11 +502,23 @@ class ExtractiveLiveLLMProvider:
                     )
                 )
 
-        queries = [clean_q]
-        if max_initial_queries >= 2:
-            queries.append(f"{clean_q} araştırma raporu istatistik veriler")
-        if max_initial_queries >= 3:
-            queries.append(f"{clean_q} saha çalışması örneklem sınırlılıklar")
+        # Arama motoruna çok uzun 3-4 cümlelik istem yerine odaklı sorgular gönder
+        core_q = re.split(r"(?<=[?!.])\s+", clean_q, maxsplit=1)[0].strip()
+        if len(core_q) > 140:
+            core_q = core_q[:140].rsplit(" ", 1)[0].strip()
+
+        if is_multi_vs_single_q:
+            queries = [
+                f"{core_q} karşılaştırma doğruluk maliyet halüsinasyon",
+                "multi-agent vs single-agent AI accuracy latency cost hallucination benchmark paper",
+                "multi-agent AI systems real world applications reliability verification evaluation",
+            ]
+        else:
+            queries = [core_q]
+            if max_initial_queries >= 2:
+                queries.append(f"{core_q} araştırma raporu istatistik veriler")
+            if max_initial_queries >= 3:
+                queries.append(f"{core_q} deneysel sonuçlar sınırlılıklar")
 
         out = PlannerOutput(
             plan_summary=(
@@ -663,7 +775,6 @@ class ExtractiveLiveLLMProvider:
         verifications: list[VerificationRecord],
         sources: list[SourceRecord],
     ) -> tuple[ReporterSynthesisOutput, UsageDelta]:
-        is_tr = language == "tr"
         clean_q = clean_question_title(question)
         final_vers = {v.claim_id: v for v in verifications if v.is_final}
         claims_by_id = {c.claim_id: c for c in claims}
@@ -703,7 +814,7 @@ class ExtractiveLiveLLMProvider:
             sq_updates.append(SubQuestionUpdateLLM(sq_id=sq.sq_id, status=st))
 
         out = ReporterSynthesisOutput(
-            title=f"Araştırma Raporu: {clean_q}" if is_tr else f"Research Report: {clean_q}",
+            title=clean_q,
             short_answer=short_answer,
             sub_question_updates=sq_updates,
             open_questions=open_qs,

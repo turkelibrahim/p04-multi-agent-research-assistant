@@ -1,4 +1,4 @@
-"""ReportLab ile Türkçe karakterleri, tıklanabilir URL'leri, iç bağlantıları ve sayfa numaralarını destekleyen PDF dışa aktarımı."""
+"""ReportLab ile Türkçe karakterleri, gizli kaynak bağlantılarını ve sayfa numaralarını destekleyen sade PDF dışa aktarımı."""
 
 from __future__ import annotations
 
@@ -17,14 +17,15 @@ from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from p04_research.export.markdown_export import _format_token_summary
-from p04_research.models import RunBundle, RunMode
+from p04_research.export.markdown_export import (
+    _format_token_summary,
+    clean_report_title,
+    format_source_display_name,
+    is_external_web_url,
+    is_statement_duplicate_of_quote,
+)
+from p04_research.models import BibliographyItem, RunBundle, RunMode
 from p04_research.workflow.i18n import (
-    evidence_level_label,
-    quality_label,
-    run_status_label,
-    source_type_label,
-    sq_status_label,
     t,
     verdict_label,
 )
@@ -105,15 +106,25 @@ def _p_with_links(text: str, style: ParagraphStyle, valid_sids: set[str]) -> Par
     return Paragraph(linked, style)
 
 
-def _p_url(url: str, style: ParagraphStyle) -> Paragraph:
-    safe = escape(url or "")
-    if url.startswith(("http://", "https://")):
-        return Paragraph(f'<a href="{safe}" color="#1D4ED8">{safe}</a>', style)
-    return Paragraph(safe, style)
+def _p_source_cell(item: BibliographyItem, style: ParagraphStyle, lang: str) -> Paragraph:
+    """Kaynak başlığının içine URL'yi gömer; açıkta URL göstermez."""
+    clean_t, clean_pub = format_source_display_name(item.title, item.publisher, item.url)
+    safe_t = escape(clean_t)
+    safe_pub = escape(clean_pub)
+    tag = f" [{escape(t('mock_tag', lang))}]" if item.is_mock else ""
+
+    if is_external_web_url(item.url, is_mock=item.is_mock):
+        safe_url = escape(item.url.strip(), {'"': "&quot;"})
+        title_part = f'<a href="{safe_url}" color="#1D4ED8"><b>{safe_t}</b></a>'
+    else:
+        title_part = f"<b>{safe_t}</b>"
+
+    pub_part = f" — {safe_pub}" if safe_pub and safe_pub.lower() not in clean_t.lower() else ""
+    return Paragraph(f"{title_part}{pub_part}{tag}", style)
 
 
 def render_report_pdf_bytes(bundle: RunBundle) -> bytes:
-    """Kayıtlı RunBundle ve FinalReport verisinden A4 akademik Türkçe PDF üretir."""
+    """Kayıtlı RunBundle ve FinalReport verisinden sade A4 Türkçe PDF üretir."""
     family = register_turkish_font_family()
     bold_font = f"{family}-Bold" if f"{family}-Bold" in pdfmetrics.getRegisteredFontNames() else family
     italic_font = f"{family}-Italic" if f"{family}-Italic" in pdfmetrics.getRegisteredFontNames() else family
@@ -125,8 +136,17 @@ def render_report_pdf_bytes(bundle: RunBundle) -> bytes:
         fontName=bold_font,
         fontSize=15,
         leading=20,
-        textColor=colors.HexColor("#111827"),
-        spaceAfter=8,
+        textColor=colors.HexColor("#18181B"),
+        spaceAfter=4,
+    )
+    meta_style = ParagraphStyle(
+        "P04Meta",
+        parent=base_styles["BodyText"],
+        fontName=family,
+        fontSize=8.5,
+        leading=12,
+        textColor=colors.HexColor("#71717A"),
+        spaceAfter=10,
     )
     h2_style = ParagraphStyle(
         "P04H2",
@@ -134,64 +154,57 @@ def render_report_pdf_bytes(bundle: RunBundle) -> bytes:
         fontName=bold_font,
         fontSize=11.5,
         leading=15,
-        textColor=colors.HexColor("#1E3A8A"),
-        spaceBefore=10,
-        spaceAfter=4,
+        textColor=colors.HexColor("#18181B"),
+        spaceBefore=12,
+        spaceAfter=5,
         keepWithNext=True,
     )
     body_style = ParagraphStyle(
         "P04Body",
         parent=base_styles["BodyText"],
         fontName=family,
-        fontSize=9.2,
-        leading=13.2,
-        textColor=colors.HexColor("#1F2937"),
-        spaceAfter=4,
-    )
-    url_style = ParagraphStyle(
-        "P04URL",
-        parent=body_style,
-        fontSize=8.0,
-        leading=10.5,
-        wordWrap="CJK",
+        fontSize=9.4,
+        leading=13.8,
+        textColor=colors.HexColor("#27272A"),
+        spaceAfter=5,
     )
     quote_style = ParagraphStyle(
         "P04Quote",
         parent=body_style,
         fontName=italic_font,
-        fontSize=8.8,
-        leading=12.2,
+        fontSize=8.9,
+        leading=12.6,
         leftIndent=10,
-        textColor=colors.HexColor("#374151"),
-        spaceAfter=4,
+        textColor=colors.HexColor("#52525B"),
+        spaceAfter=5,
     )
     badge_style = ParagraphStyle(
         "P04Badge",
         parent=body_style,
         fontName=bold_font,
-        fontSize=9,
+        fontSize=8.5,
         textColor=colors.HexColor("#92400E"),
         backColor=colors.HexColor("#FEF3C7"),
-        borderPadding=6,
-        spaceAfter=6,
+        borderPadding=5,
+        spaceAfter=8,
     )
 
     m = bundle.metadata
     lang = m.language.value
     rep = bundle.report
     buffer = BytesIO()
-    title_text = rep.title if rep else m.question
+    raw_title = rep.title if rep else m.question
+    title_text = clean_report_title(raw_title)
     short_hdr = title_text if len(title_text) <= 72 else f"{title_text[:69]}..."
+    date_short = (m.started_at or "")[:10]
 
     def _draw_chrome(canvas, doc_obj):
         canvas.saveState()
         canvas.setFont(family, 7.5)
-        canvas.setFillColor(colors.HexColor("#6B7280"))
-        # Üst bilgi
-        canvas.drawString(16 * mm, A4[1] - 10 * mm, f"P04 · {short_hdr}")
-        # Alt bilgi: rapor kimliği, tarih ve sayfa numarası
+        canvas.setFillColor(colors.HexColor("#71717A"))
+        canvas.drawString(16 * mm, A4[1] - 10 * mm, short_hdr)
         page_lbl = f"Sayfa {doc_obj.page}" if lang == "tr" else f"Page {doc_obj.page}"
-        canvas.drawString(16 * mm, 9 * mm, f"ID: {m.run_id} · {m.started_at}")
+        canvas.drawString(16 * mm, 9 * mm, date_short)
         canvas.drawRightString(A4[0] - 16 * mm, 9 * mm, page_lbl)
         canvas.restoreState()
 
@@ -213,32 +226,15 @@ def render_report_pdf_bytes(bundle: RunBundle) -> bytes:
 
     mode_str = t("mode_demo", lang) if m.mode == RunMode.DEMO else t("mode_live", lang)
     depth_str = t("depth_fast", lang) if m.depth.value == "fast" else t("depth_standard", lang)
-    status_str = run_status_label(m.status, lang)
-    qual_str = quality_label(
-        (rep.research_quality if rep else m.research_quality) or "high", lang
-    )
     tokens_str = _format_token_summary(bundle)
-
-    meta_rows = [
-        [_p("Soru" if lang == "tr" else "Question", body_style), _p(m.question, body_style)],
-        [_p("Kimlik / Tarih" if lang == "tr" else "Run ID / Date", body_style), _p(f"{m.run_id} · {m.started_at}", body_style)],
-        [_p("Mod / Derinlik / Durum" if lang == "tr" else "Mode / Depth / Status", body_style), _p(f"{mode_str} / {depth_str} / {status_str}", body_style)],
-        [_p("Araştırma Kalitesi" if lang == "tr" else "Research Quality", body_style), _p(qual_str, body_style)],
-        [_p("Kullanım" if lang == "tr" else "Usage", body_style), _p(f"Model: {m.model_calls} · Arama: {m.search_calls} · Süre: {m.duration_ms} ms · Token: {tokens_str}", body_style)],
-    ]
-    meta_table = Table(meta_rows, colWidths=[45 * mm, 133 * mm])
-    meta_table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F3F4F6")),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("PADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
+    meta_line = (
+        f"Tarih: {date_short} · Mod: {mode_str} ({depth_str}) · "
+        f"İncelenen kaynak: {len(bundle.sources)} · Token: {tokens_str}"
+        if lang == "tr"
+        else f"Date: {date_short} · Mode: {mode_str} ({depth_str}) · "
+        f"Sources inspected: {len(bundle.sources)} · Tokens: {tokens_str}"
     )
-    story.append(meta_table)
-    story.append(Spacer(1, 6))
+    story.append(_p(meta_line, meta_style))
 
     if rep is None:
         story.append(_p(f"{t('technical_error_prefix', lang)}: {m.error_message or '-'}", body_style))
@@ -251,77 +247,63 @@ def render_report_pdf_bytes(bundle: RunBundle) -> bytes:
     valid_sids = {b.source_id for b in rep.bibliography}
 
     # 1. Kısa Yanıt
-    story.append(_p("Kısa Yanıt — Yönetici Özeti" if lang == "tr" else "Short Answer — Executive Summary", h2_style))
+    story.append(_p("Kısa Yanıt" if lang == "tr" else "Short Answer", h2_style))
     story.append(_p_with_links(rep.short_answer, body_style, valid_sids))
 
-    # 2. Araştırma Amacı ve Yöntem/Kapsam
-    story.append(_p(t("report_heading_purpose", lang), h2_style))
-    story.append(_p(rep.research_purpose or m.plan_summary or m.question, body_style))
-
-    story.append(_p(t("report_heading_method", lang), h2_style))
-    story.append(_p(rep.methodology_and_scope or m.scope_notes or "-", body_style))
-
-    # 3. Alt Araştırma Soruları
-    story.append(_p(t("report_heading_plan", lang), h2_style))
-    if m.plan_summary:
-        story.append(_p(m.plan_summary, body_style))
-    sq_rows = [[_p("ID", body_style), _p("Durum" if lang == "tr" else "Status", body_style), _p("Alt Soru" if lang == "tr" else "Sub-question", body_style)]]
-    for sq in rep.sub_questions:
-        sq_rows.append([_p(sq.sq_id, body_style), _p(sq_status_label(sq.status, lang), body_style), _p(sq.text, body_style)])
-    sq_table = Table(sq_rows, colWidths=[16 * mm, 36 * mm, 126 * mm], repeatRows=1, splitByRow=1)
-    sq_table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("PADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
-    story.append(sq_table)
-
-    # 4. Temel Bulgular
+    # 2. Temel Bulgular
     story.append(_p(t("report_heading_findings", lang), h2_style))
     if not rep.supported_findings:
         story.append(_p(t("no_supported_findings", lang), body_style))
     else:
         for item in rep.supported_findings:
             cites = " ".join(f"[{sid}]" for sid in item.citation_ids)
-            story.append(
-                _p_with_links(
-                    f"{item.claim_id} ({item.sq_id}): {item.statement} {cites}",
-                    body_style,
-                    valid_sids,
-                )
+            cite_suffix = f" {cites}" if cites else ""
+            primary_q = item.quotes[0] if item.quotes else None
+            is_dup = (
+                primary_q is not None
+                and not primary_q.explanatory_note
+                and primary_q.quote_language == lang
+                and is_statement_duplicate_of_quote(item.statement, primary_q.quote)
             )
-            if item.rationale:
-                story.append(_p(item.rationale, body_style))
-            for q in item.quotes:
-                story.append(_p_with_links(f"[{q.source_id}] ({q.quote_language}): \"{q.quote}\"", quote_style, valid_sids))
-                if q.explanatory_note:
-                    story.append(_p(q.explanatory_note, body_style))
-            if item.single_source_warning:
-                story.append(_p(f"Not: {item.single_source_warning}", body_style))
+            if is_dup and primary_q is not None:
+                story.append(_p_with_links(f"• {primary_q.quote}{cite_suffix}", body_style, valid_sids))
+            else:
+                story.append(
+                    _p_with_links(
+                        f"• {item.statement}{cite_suffix}",
+                        body_style,
+                        valid_sids,
+                    )
+                )
+                if primary_q is not None:
+                    story.append(_p(f'"{primary_q.quote}"', quote_style))
+                    if primary_q.explanatory_note:
+                        story.append(_p(primary_q.explanatory_note, quote_style))
+            if item.causation_warning:
+                note_lbl = "Not" if lang == "tr" else "Note"
+                story.append(_p(f"{note_lbl}: {item.causation_warning}", body_style))
 
-    # 5. Sayısal Veriler ve Karşılaştırmalar
-    story.append(_p(t("report_heading_quant", lang), h2_style))
-    if not rep.quantitative_comparisons:
-        story.append(_p("Doğrulanmış sayısal karşılaştırma kaydı yoktur." if lang == "tr" else "No quantitative comparisons.", body_style))
-    else:
-        for q_item in rep.quantitative_comparisons:
-            story.append(_p_with_links(f"• {q_item.replace('**', '')}", body_style, valid_sids))
-
-    # 6. Çelişen Kaynaklar & Karşıt Kanıtlar
-    if rep.conflicts:
-        story.append(_p(t("report_heading_conflicts", lang), h2_style))
+    # 3. Sınırlılıklar ve Çelişen Bulgular (yalnızca varsa)
+    if rep.conflicts or rep.limitations:
+        sec_title = (
+            "Sınırlılıklar ve Çelişen Bulgular"
+            if lang == "tr"
+            else "Limitations & Conflicting Evidence"
+        )
+        story.append(_p(sec_title, h2_style))
         for conf in rep.conflicts:
-            story.append(Paragraph(f"<b>{escape(conf.claim_id)}</b>: {escape(conf.statement)}", body_style))
+            story.append(Paragraph(f"<b>{escape(conf.statement)}</b>", body_style))
             story.append(_p(conf.explanation, body_style))
             conf_table = Table(
                 [
-                    [_p_with_links(f"[{conf.side_a.source_id}]", body_style, valid_sids), _p_with_links(f"[{conf.side_b.source_id}]", body_style, valid_sids)],
-                    [_p(f"\"{conf.side_a.quote}\"", quote_style), _p(f"\"{conf.side_b.quote}\"", quote_style)],
+                    [
+                        _p_with_links(f"[{conf.side_a.source_id}]", body_style, valid_sids),
+                        _p_with_links(f"[{conf.side_b.source_id}]", body_style, valid_sids),
+                    ],
+                    [
+                        _p(f'"{conf.side_a.quote}"', quote_style),
+                        _p(f'"{conf.side_b.quote}"', quote_style),
+                    ],
                 ],
                 colWidths=[89 * mm, 89 * mm],
                 splitByRow=1,
@@ -329,91 +311,58 @@ def render_report_pdf_bytes(bundle: RunBundle) -> bytes:
             conf_table.setStyle(
                 TableStyle(
                     [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#FEF3C7")),
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F4F4F5")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E4E4E7")),
                         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("PADDING", (0, 0), (-1, -1), 4),
+                        ("PADDING", (0, 0), (-1, -1), 5),
                     ]
                 )
             )
             story.append(conf_table)
+            story.append(Spacer(1, 4))
 
-    story.append(_p(t("report_heading_counter", lang), h2_style))
-    if not rep.counter_evidence_summary:
-        story.append(_p("Doğrudan karşıt kanıt tespit edilmemiştir." if lang == "tr" else "No counter-evidence.", body_style))
-    else:
-        for ce_line in rep.counter_evidence_summary:
-            story.append(_p_with_links(f"• {ce_line}", body_style, valid_sids))
-
-    # 7. Sınırlılıklar
-    story.append(_p(t("report_heading_limitations", lang), h2_style))
-    if not rep.limitations:
-        story.append(_p("Önemli bir kanıt boşluğu yoktur." if lang == "tr" else "No major limitations.", body_style))
-    else:
         for lim in rep.limitations:
             v_lbl = verdict_label(lim.verdict, lang)
-            story.append(Paragraph(f"<b>{escape(lim.claim_id)} · {escape(v_lbl)}</b>: {escape(lim.statement)}", body_style))
-            if lim.initial_verdict is not None:
-                init_lbl = verdict_label(lim.initial_verdict, lang)
-                story.append(_p(f"1. Tur: {init_lbl} — {lim.initial_rationale or ''}", body_style))
-            story.append(_p(f"Son Gerekçe: {lim.rationale}" if lang == "tr" else f"Final Rationale: {lim.rationale}", body_style))
-            if lim.missing_info:
-                story.append(_p(f"Eksik Bilgi: {lim.missing_info}" if lang == "tr" else f"Missing Info: {lim.missing_info}", body_style))
-            for ce in lim.counter_evidence:
-                story.append(_p_with_links(f"[{ce.source_id}]: \"{ce.quote}\"", quote_style, valid_sids))
+            story.append(
+                Paragraph(
+                    f"<b>{escape(v_lbl)}:</b> {escape(lim.statement)} — {escape(lim.rationale)}",
+                    body_style,
+                )
+            )
+            for ce in lim.counter_evidence[:1]:
+                story.append(_p_with_links(f'[{ce.source_id}]: "{ce.quote}"', quote_style, valid_sids))
 
-    # 8. Genel Değerlendirme & Açık Sorular
-    story.append(_p(t("report_heading_assessment", lang), h2_style))
-    story.append(_p(rep.overall_assessment or rep.short_answer, body_style))
-
-    story.append(_p(t("report_heading_open", lang), h2_style))
-    if not rep.open_questions:
-        story.append(_p(t("no_open_questions", lang), body_style))
-    else:
-        for oq in rep.open_questions:
-            story.append(_p(f"• {oq}", body_style))
-
-    # 9. Kaynakça (sayfa taşmasız, tıklanabilir URL ve iç çapa bağlantılı)
+    # 4. Kaynakça (URL sütunu olmadan, bağlantılar kaynak adının içine gömülü)
     story.append(_p(t("report_heading_bibliography", lang), h2_style))
     if not rep.bibliography:
-        story.append(_p("Kaynak yok." if lang == "tr" else "No sources.", body_style))
+        story.append(_p("Kaynak kaydedilmedi." if lang == "tr" else "No sources recorded.", body_style))
     else:
         bib_rows = [[
-            _p("ID", body_style),
-            _p("Başlık / Yayıncı / Tür" if lang == "tr" else "Title / Publisher / Type", body_style),
-            _p("Yayın / Erişim Tarihi" if lang == "tr" else "Published / Accessed", body_style),
-            _p("URL", body_style),
+            _p("No", body_style),
+            _p("Kaynak" if lang == "tr" else "Source", body_style),
+            _p("Tarih" if lang == "tr" else "Date", body_style),
         ]]
         for b in rep.bibliography:
             pub_date = b.published_date or t("unknown", lang)
-            tag = f" [{t('mock_tag', lang)}]" if b.is_mock else ""
-            ev_lbl = evidence_level_label(b.evidence_level, lang)
-            s_type = source_type_label(b.source_type, lang)
             id_cell = Paragraph(f'<a name="src_{escape(b.source_id)}"/><b>{escape(b.source_id)}</b>', body_style)
-            date_cell = _p(
-                f"{'Yayın' if lang == 'tr' else 'Pub'}: {pub_date}\n"
-                f"{'Erişim' if lang == 'tr' else 'Acc'}: {b.retrieved_at}",
-                body_style,
-            )
             bib_rows.append([
                 id_cell,
-                _p(f"{b.title}{tag}\n{b.publisher}\n{s_type} ({ev_lbl}, {b.retrieval_method})", body_style),
-                date_cell,
-                _p_url(b.url, url_style),
+                _p_source_cell(b, body_style, lang),
+                _p(pub_date, body_style),
             ])
         bib_table = Table(
             bib_rows,
-            colWidths=[13 * mm, 67 * mm, 44 * mm, 54 * mm],
+            colWidths=[15 * mm, 128 * mm, 35 * mm],
             repeatRows=1,
             splitByRow=1,
         )
         bib_table.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F4F4F5")),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E4E4E7")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("PADDING", (0, 0), (-1, -1), 4),
+                    ("PADDING", (0, 0), (-1, -1), 5),
                 ]
             )
         )

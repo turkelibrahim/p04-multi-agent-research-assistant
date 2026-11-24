@@ -1,17 +1,227 @@
-"""Kayıtlı FinalReport nesnesinden standart UTF-8 Markdown raporu üretimi (12 bölümlü akademik yapı)."""
+"""Kayıtlı FinalReport nesnesinden sade, bağlantıları kaynak adına gizlenmiş UTF-8 Markdown raporu üretimi."""
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlsplit
+
 from p04_research.models import RunBundle, RunMode
 from p04_research.workflow.i18n import (
-    evidence_level_label,
-    quality_label,
-    run_status_label,
-    source_type_label,
-    sq_status_label,
     t,
     verdict_label,
 )
+
+_BIDI_NOISE_RE = re.compile(r"[\u200b\u200e\u200f\u202a-\u202e\ufeff]")
+_INLINE_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_WS_RE = re.compile(r"\s+")
+_PUNCT_NORM_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
+_SENTENCE_SPLIT_TITLE_RE = re.compile(r"(?<=[?!.])\s+")
+
+_PUBLISHER_BRAND_MAP: dict[str, str] = {
+    "pwc.com.tr": "PwC Türkiye",
+    "news.microsoft.com": "Microsoft News",
+    "microsoft.com": "Microsoft",
+    "webrazzi.com": "Webrazzi",
+    "kariyer.net": "Kariyer.net",
+    "indigodergisi.com": "İndigo Dergisi",
+    "incturkiye.com": "Inc. Türkiye",
+    "tr.linkedin.com": "LinkedIn",
+    "linkedin.com": "LinkedIn",
+    "youtube.com": "YouTube",
+    "youtu.be": "YouTube",
+    "instagram.com": "Instagram",
+    "x.com": "X",
+    "twitter.com": "X",
+    "personel.com": "Personel.com",
+    "tr.wikipedia.org": "Vikipedi",
+    "wikipedia.org": "Wikipedia",
+    "github.com": "GitHub",
+    "openai.com": "OpenAI",
+    "anthropic.com": "Anthropic",
+    "arxiv.org": "arXiv",
+    "huggingface.co": "Hugging Face",
+    "langchain.com": "LangChain",
+    "mindstudio.ai": "MindStudio",
+    "flowhunt.io": "FlowHunt",
+    "ibm.com": "IBM",
+    "aws.amazon.com": "AWS",
+    "cloud.google.com": "Google Cloud",
+    "nvidia.com": "NVIDIA",
+    "medium.com": "Medium",
+    "substack.com": "Substack",
+    "forbes.com": "Forbes",
+    "gartner.com": "Gartner",
+    "mckinsey.com": "McKinsey",
+    "deloitte.com": "Deloitte",
+}
+
+_BRAND_TOKEN_CASING: dict[str, str] = {
+    "ibm": "IBM",
+    "mit": "MIT",
+    "aws": "AWS",
+    "bbc": "BBC",
+    "cnn": "CNN",
+    "pwc": "PwC",
+    "sap": "SAP",
+    "oecd": "OECD",
+    "ieee": "IEEE",
+    "arxiv": "arXiv",
+    "github": "GitHub",
+    "openai": "OpenAI",
+    "langchain": "LangChain",
+    "mindstudio": "MindStudio",
+    "flowhunt": "FlowHunt",
+    "nvidia": "NVIDIA",
+    "linkedin": "LinkedIn",
+    "youtube": "YouTube",
+}
+
+_MULTI_PART_TLDS = (
+    ".com.tr",
+    ".edu.tr",
+    ".gov.tr",
+    ".org.tr",
+    ".bel.tr",
+    ".k12.tr",
+    ".net.tr",
+    ".co.uk",
+    ".ac.uk",
+    ".org.uk",
+    ".com.au",
+    ".co.jp",
+    ".co.in",
+    ".com.br",
+)
+
+
+def _strip_noise(text: str) -> str:
+    cleaned = _BIDI_NOISE_RE.sub("", text or "")
+    return _WS_RE.sub(" ", cleaned).strip()
+
+
+def is_external_web_url(url: str, is_mock: bool = False) -> bool:
+    """Gerçek bir harici web bağlantısı olup olmadığını denetler (kurmaca/.local adresleri eler)."""
+    if is_mock or not url:
+        return False
+    raw = url.strip()
+    if not raw.startswith(("http://", "https://")):
+        return False
+    host = urlsplit(raw).netloc.lower().split(":", 1)[0]
+    if not host or host.endswith(".local") or "kurmaca.p04.local" in host:
+        return False
+    return True
+
+
+def clean_publisher_name(publisher: str, title: str = "", url: str = "") -> str:
+    """Ham alan adı veya URL içeren yayıncı bilgisini okunaklı marka adına çevirir."""
+    raw_pub = _strip_noise(_INLINE_URL_RE.sub("", publisher or ""))
+    clean_t = _strip_noise(title)
+    host = ""
+    if url:
+        host = urlsplit(url.strip()).netloc.lower().split(":", 1)[0]
+        if host.startswith("www."):
+            host = host[4:]
+
+    lookup = raw_pub.lower()
+    if lookup.startswith("www."):
+        lookup = lookup[4:]
+    if lookup in _PUBLISHER_BRAND_MAP:
+        return _PUBLISHER_BRAND_MAP[lookup]
+    if host and host in _PUBLISHER_BRAND_MAP:
+        return _PUBLISHER_BRAND_MAP[host]
+
+    candidate = raw_pub or host
+    if not candidate:
+        return ""
+
+    if " " not in candidate and "." in candidate:
+        for sep in (" | ", " - ", " — ", " · "):
+            if sep in clean_t:
+                tail = clean_t.rsplit(sep, 1)[-1].strip()
+                if 2 <= len(tail) <= 32 and not tail.lower().startswith(("http://", "https://")):
+                    return tail
+
+        dom = candidate.lower()
+        if dom.startswith("www."):
+            dom = dom[4:]
+        matched_multi = False
+        for suf in _MULTI_PART_TLDS:
+            if dom.endswith(suf) and len(dom) > len(suf):
+                dom = dom[: -len(suf)]
+                matched_multi = True
+                break
+        if not matched_multi and "." in dom:
+            dom = dom.rsplit(".", 1)[0]
+        parts = [p for p in dom.split(".") if p and p not in ("www", "m", "blog", "news", "docs", "tr", "en")]
+        main_token = parts[-1] if parts else dom.split(".")[-1]
+        if main_token:
+            low_tok = main_token.lower()
+            if low_tok in _BRAND_TOKEN_CASING:
+                return _BRAND_TOKEN_CASING[low_tok]
+            return main_token[:1].upper() + main_token[1:]
+
+    return candidate
+
+
+def clean_source_title(title: str, publisher_label: str = "") -> str:
+    """Başlıktaki yönlü görünmez karakterleri, ham URL'leri ve tekrarlayan yayıncı eklerini temizler."""
+    cleaned = _strip_noise(title)
+    if not cleaned or cleaned.lower().startswith(("http://", "https://")):
+        return publisher_label or "Kaynak"
+
+    if publisher_label:
+        pub_low = publisher_label.lower()
+        for sep in (" | ", " - ", " — ", " · "):
+            if sep in cleaned:
+                head, tail = cleaned.rsplit(sep, 1)
+                tail_low = tail.strip().lower()
+                if tail_low == pub_low or pub_low in tail_low or tail_low in pub_low:
+                    if head.strip():
+                        cleaned = head.strip()
+                        break
+    return cleaned
+
+
+def format_source_display_name(title: str, publisher: str, url: str = "") -> tuple[str, str]:
+    """Kaynak başlığını ve yayıncı adını insan okunur biçimde döndürür."""
+    pub_label = clean_publisher_name(publisher, title=title, url=url)
+    title_label = clean_source_title(title, publisher_label=pub_label)
+    return title_label, pub_label
+
+
+def format_source_markdown_link(
+    title: str,
+    publisher: str,
+    url: str,
+    is_mock: bool = False,
+) -> str:
+    """URL'yi açıkta göstermeden temiz kaynak adının içine gömen Markdown bağlantısı üretir."""
+    clean_t, clean_pub = format_source_display_name(title, publisher, url)
+    if clean_pub and clean_pub.lower() not in clean_t.lower():
+        label = f"{clean_t} — {clean_pub}"
+    else:
+        label = clean_t
+    safe_label = label.replace("[", "(").replace("]", ")")
+    if is_external_web_url(url, is_mock=is_mock):
+        safe_url = url.strip().replace(" ", "%20").replace(")", "%29")
+        return f"[{safe_label}]({safe_url})"
+    return f"**{safe_label}**"
+
+
+def is_statement_duplicate_of_quote(statement: str, quote: str) -> bool:
+    """Bulgu ifadesi ile alıntı metninin aynı cümlenin tekrarı olup olmadığını denetler."""
+    s_norm = _WS_RE.sub(" ", _PUNCT_NORM_RE.sub(" ", (statement or "").lower())).strip()
+    q_norm = _WS_RE.sub(" ", _PUNCT_NORM_RE.sub(" ", (quote or "").lower())).strip()
+    if not s_norm or not q_norm:
+        return False
+    if len(s_norm) >= 20 and (s_norm in q_norm or q_norm in s_norm):
+        return True
+    s_toks = set(s_norm.split())
+    q_toks = set(q_norm.split())
+    if not s_toks or not q_toks:
+        return False
+    overlap = len(s_toks & q_toks) / len(s_toks | q_toks)
+    return overlap >= 0.72
 
 
 def _format_token_summary(bundle: RunBundle) -> str:
@@ -32,8 +242,21 @@ def _format_token_summary(bundle: RunBundle) -> str:
     return f"{m.total_tokens}{cost_part}"
 
 
+def clean_report_title(title: str) -> str:
+    """Rapor başlığındaki gereksiz önekleri temizler; çok cümleli uzun istemlerde ilk ana soruyu alır."""
+    cleaned = _strip_noise(title)
+    for prefix in ("Araştırma Raporu:", "Research Report:"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+    if len(cleaned) > 120:
+        parts = _SENTENCE_SPLIT_TITLE_RE.split(cleaned, maxsplit=1)
+        if len(parts) > 1 and len(parts[0].strip()) >= 25:
+            return parts[0].strip()
+    return cleaned
+
+
 def render_report_markdown(bundle: RunBundle) -> str:
-    """Saklanmış RunBundle ve FinalReport verisinden 12 bölümlü UTF-8 Markdown raporu üretir."""
+    """Saklanmış RunBundle ve FinalReport verisinden sade ve okunaklı UTF-8 Markdown raporu üretir."""
     m = bundle.metadata
     lang = m.language.value
     rep = bundle.report
@@ -41,79 +264,41 @@ def render_report_markdown(bundle: RunBundle) -> str:
         return f"# {m.question}\n\n{t('technical_error_prefix', lang)}: {m.error_message or '-'}\n"
 
     lines: list[str] = []
-    lines.append(f"# {rep.title}")
+    lines.append(f"# {clean_report_title(rep.title)}")
     lines.append("")
-
-    if m.mode == RunMode.DEMO:
-        lines.append(f"> **{t('mock_badge', lang)}** ({t('mode_demo', lang)})")
-        lines.append("")
 
     mode_str = t("mode_demo", lang) if m.mode == RunMode.DEMO else t("mode_live", lang)
     depth_str = t("depth_fast", lang) if m.depth.value == "fast" else t("depth_standard", lang)
-    status_str = run_status_label(m.status, lang)
-    qual_str = quality_label(rep.research_quality or m.research_quality, lang)
     tokens_str = _format_token_summary(bundle)
+    date_short = (m.started_at or "")[:10]
+
+    if m.mode == RunMode.DEMO:
+        lines.append(f"> **{t('mock_badge', lang)}** ({mode_str})")
+        lines.append("")
 
     if lang == "tr":
-        lines.append(f"- **Soru:** {m.question}")
-        lines.append(f"- **Çalışma Kimliği:** `{m.run_id}`")
-        lines.append(f"- **Mod / Derinlik / Teknik Durum:** {mode_str} / {depth_str} / **{status_str}**")
-        lines.append(f"- **Araştırma Kalitesi (Quality Gate):** **{qual_str}**")
-        lines.append(f"- **Tarih:** {m.started_at}")
         lines.append(
-            f"- **Kullanım:** Model çağrısı: {m.model_calls} · Arama çağrısı: {m.search_calls} · "
-            f"Süre: {m.duration_ms} ms · Token: {tokens_str}"
+            f"_Tarih: {date_short} · Mod: {mode_str} ({depth_str}) · "
+            f"İncelenen kaynak: {len(bundle.sources)} · Token: {tokens_str}_"
         )
     else:
-        lines.append(f"- **Question:** {m.question}")
-        lines.append(f"- **Run ID:** `{m.run_id}`")
-        lines.append(f"- **Mode / Depth / Technical Status:** {mode_str} / {depth_str} / **{status_str}**")
-        lines.append(f"- **Research Quality (Quality Gate):** **{qual_str}**")
-        lines.append(f"- **Date:** {m.started_at}")
         lines.append(
-            f"- **Usage:** Model calls: {m.model_calls} · Search calls: {m.search_calls} · "
-            f"Duration: {m.duration_ms} ms · Tokens: {tokens_str}"
+            f"_Date: {date_short} · Mode: {mode_str} ({depth_str}) · "
+            f"Sources inspected: {len(bundle.sources)} · Tokens: {tokens_str}_"
         )
     lines.append("")
 
     if rep.error_notice:
-        lines.append(f"> **!** {rep.error_notice}")
+        lines.append(f"> {rep.error_notice}")
         lines.append("")
 
-    # 1. Yönetici Özeti / Kısa Yanıt (test uyumluluğu için 'Kısa Yanıt' / 'Short Answer' başlığı korunur)
-    lines.append(f"## {'Kısa Yanıt — Yönetici Özeti' if lang == 'tr' else 'Short Answer — Executive Summary'}")
+    # 1. Kısa Yanıt
+    lines.append(f"## {'Kısa Yanıt' if lang == 'tr' else 'Short Answer'}")
     lines.append("")
     lines.append(rep.short_answer)
     lines.append("")
 
-    # 2. Araştırma Amacı
-    lines.append(f"## {t('report_heading_purpose', lang)}")
-    lines.append("")
-    lines.append(rep.research_purpose or m.plan_summary or m.question)
-    lines.append("")
-
-    # 3. Yöntem ve Kapsam
-    lines.append(f"## {t('report_heading_method', lang)}")
-    lines.append("")
-    lines.append(rep.methodology_and_scope or m.scope_notes or "-")
-    lines.append("")
-
-    # 4. Alt Araştırma Soruları
-    lines.append(f"## {t('report_heading_plan', lang)}")
-    lines.append("")
-    if m.plan_summary:
-        lines.append(m.plan_summary)
-        lines.append("")
-    for sq in rep.sub_questions:
-        st_lbl = sq_status_label(sq.status, lang)
-        lines.append(f"- **{sq.sq_id}** [{st_lbl}] — {sq.text}")
-        if sq.scope_note:
-            lines.append(f"  - _{sq.scope_note}_")
-        if sq.search_intent:
-            lines.append(f"  - {'Arama amacı' if lang == 'tr' else 'Search intent'}: {sq.search_intent}")
-    lines.append("")
-
-    # 5. Temel Bulgular
+    # 2. Temel Bulgular
     lines.append(f"## {t('report_heading_findings', lang)}")
     lines.append("")
     if not rep.supported_findings:
@@ -122,116 +307,52 @@ def render_report_markdown(bundle: RunBundle) -> str:
     else:
         for item in rep.supported_findings:
             cites = " ".join(f"[{sid}]" for sid in item.citation_ids)
-            lines.append(f"### {item.claim_id} ({item.sq_id}) — {item.statement} {cites}")
-            if item.rationale:
-                lines.append(f"- **Gerekçe:** {item.rationale}" if lang == "tr" else f"- **Rationale:** {item.rationale}")
-            if item.numeric_context:
-                lines.append(f"- **Sayısal Bağlam:** {item.numeric_context}" if lang == "tr" else f"- **Numeric Context:** {item.numeric_context}")
-            for q in item.quotes:
-                lines.append(f"  - [{q.source_id}] ({q.quote_language}): \"{q.quote}\"")
-                if q.explanatory_note:
-                    lines.append(f"    - _{q.explanatory_note}_")
-            if item.single_source_warning:
-                lines.append(f"- *Not:* {item.single_source_warning}")
+            cite_suffix = f" {cites}" if cites else ""
+            primary_q = item.quotes[0] if item.quotes else None
+            is_dup = (
+                primary_q is not None
+                and not primary_q.explanatory_note
+                and primary_q.quote_language == lang
+                and is_statement_duplicate_of_quote(item.statement, primary_q.quote)
+            )
+            if is_dup and primary_q is not None:
+                lines.append(f"- {primary_q.quote}{cite_suffix}")
+            else:
+                lines.append(f"- **{item.statement}**{cite_suffix}")
+                if primary_q is not None:
+                    lines.append(f'  > "{primary_q.quote}"')
+                    if primary_q.explanatory_note:
+                        lines.append(f"  > _{primary_q.explanatory_note}_")
             if item.causation_warning:
-                lines.append(f"- **!** {item.causation_warning}")
+                note_lbl = "Not" if lang == "tr" else "Note"
+                lines.append(f"  - _{note_lbl}: {item.causation_warning}_")
             lines.append("")
 
-    # 6. Sayısal Veriler ve Karşılaştırmalar
-    lines.append(f"## {t('report_heading_quant', lang)}")
-    lines.append("")
-    if not rep.quantitative_comparisons:
-        lines.append(
-            "Doğrulanmış sayısal karşılaştırma kaydı bulunmamaktadır."
+    # 3. Sınırlılıklar ve Çelişen Bulgular (yalnızca varsa gösterilir)
+    if rep.conflicts or rep.limitations:
+        section_title = (
+            "Sınırlılıklar ve Çelişen Bulgular"
             if lang == "tr"
-            else "No verified quantitative comparisons recorded."
+            else "Limitations & Conflicting Evidence"
         )
-    else:
-        for q_item in rep.quantitative_comparisons:
-            lines.append(f"- {q_item}")
-    lines.append("")
-
-    # 7. Çelişen Kaynaklar ve Karşıt Kanıtlar
-    if rep.conflicts:
-        lines.append(f"## {t('report_heading_conflicts', lang)}")
+        lines.append(f"## {section_title}")
         lines.append("")
         for conf in rep.conflicts:
-            lines.append(f"### {conf.claim_id} ({conf.sq_id}) — {conf.statement}")
-            lines.append(conf.explanation)
-            lines.append(f"- **[{conf.side_a.source_id}]:** \"{conf.side_a.quote}\"")
-            lines.append(f"- **[{conf.side_b.source_id}]:** \"{conf.side_b.quote}\"")
+            lines.append(
+                f"- **[{conf.side_a.source_id}] vs [{conf.side_b.source_id}]** — "
+                f"{conf.statement}: {conf.explanation}"
+            )
+            lines.append(f'  > [{conf.side_a.source_id}]: "{conf.side_a.quote}"')
+            lines.append(f'  > [{conf.side_b.source_id}]: "{conf.side_b.quote}"')
             lines.append("")
-
-    lines.append(f"## {t('report_heading_counter', lang)}")
-    lines.append("")
-    if not rep.counter_evidence_summary:
-        lines.append(
-            "Doğrudan karşıt kanıt tespit edilmemiştir."
-            if lang == "tr"
-            else "No direct counter-evidence detected."
-        )
-    else:
-        for ce_line in rep.counter_evidence_summary:
-            lines.append(f"- {ce_line}")
-    lines.append("")
-
-    # 8. Sınırlılıklar
-    lines.append(f"## {t('report_heading_limitations', lang)}")
-    lines.append("")
-    if not rep.limitations:
-        lines.append(
-            "Önemli bir kanıt boşluğu veya çürütülen iddia bulunmamaktadır."
-            if lang == "tr"
-            else "No major evidence gaps or contradicted claims remain."
-        )
-        lines.append("")
-    else:
         for lim in rep.limitations:
             v_lbl = verdict_label(lim.verdict, lang)
-            lines.append(f"### {lim.claim_id} ({lim.sq_id}) · **{v_lbl}** — {lim.statement}")
-            if lim.initial_verdict is not None:
-                init_lbl = verdict_label(lim.initial_verdict, lang)
-                lines.append(
-                    f"- **1. Tur İlk Karar:** {init_lbl} — {lim.initial_rationale or ''}"
-                    if lang == "tr"
-                    else f"- **Round 1 Initial Verdict:** {init_lbl} — {lim.initial_rationale or ''}"
-                )
-            lines.append(
-                f"- **Son Gerekçe:** {lim.rationale}"
-                if lang == "tr"
-                else f"- **Final Rationale:** {lim.rationale}"
-            )
-            if lim.missing_info:
-                lines.append(
-                    f"- **Eksik Bilgi:** {lim.missing_info}"
-                    if lang == "tr"
-                    else f"- **Missing Info:** {lim.missing_info}"
-                )
-            for ce in lim.counter_evidence:
-                lines.append(f"  - [{ce.source_id}]: \"{ce.quote}\"")
+            lines.append(f"- **{v_lbl}:** {lim.statement} — {lim.rationale}")
+            for ce in lim.counter_evidence[:1]:
+                lines.append(f'  > [{ce.source_id}]: "{ce.quote}"')
             lines.append("")
 
-    # 9. Genel Değerlendirme
-    lines.append(f"## {t('report_heading_assessment', lang)}")
-    lines.append("")
-    lines.append(rep.overall_assessment or rep.short_answer)
-    if rep.quality_notes:
-        lines.append("")
-        for qn in rep.quality_notes:
-            lines.append(f"- **Kalite Notu:** {qn}")
-    lines.append("")
-
-    # 10. Açık Sorular
-    lines.append(f"## {t('report_heading_open', lang)}")
-    lines.append("")
-    if not rep.open_questions:
-        lines.append(t("no_open_questions", lang))
-    else:
-        for oq in rep.open_questions:
-            lines.append(f"- {oq}")
-    lines.append("")
-
-    # 11. Kaynakça
+    # 4. Kaynakça (URL açıkta yazılmaz, kaynak adının içine gizlenir)
     lines.append(f"## {t('report_heading_bibliography', lang)}")
     lines.append("")
     if not rep.bibliography:
@@ -239,21 +360,18 @@ def render_report_markdown(bundle: RunBundle) -> str:
     else:
         for b in rep.bibliography:
             pub_date = b.published_date or t("unknown", lang)
-            ev_lvl = evidence_level_label(b.evidence_level, lang)
-            s_type = source_type_label(b.source_type, lang)
-            mock_str = f" · [{t('mock_tag', lang)}]" if b.is_mock else ""
-            dup_str = (
-                f" · (Kopya -> {b.duplicate_of_source_id})"
-                if b.duplicate_of_source_id and lang == "tr"
-                else (f" · (Duplicate of {b.duplicate_of_source_id})" if b.duplicate_of_source_id else "")
-            )
-            acc_str = "" if b.is_accessible else (" · [Erişilemedi]" if lang == "tr" else " · [Inaccessible]")
-            author_str = f" · Yazar: {b.author}" if b.author else ""
-            lines.append(
-                f"- **[{b.source_id}] {b.title}**{mock_str}{dup_str}{acc_str} — {b.publisher}{author_str} | "
-                f"{s_type} ({ev_lvl}, {b.retrieval_method}) | "
-                f"{'Yayın Tarihi' if lang == 'tr' else 'Published'}: {pub_date} | "
-                f"{'Erişim Tarihi' if lang == 'tr' else 'Accessed'}: {b.retrieved_at} | {b.url}"
-            )
+            src_link = format_source_markdown_link(b.title, b.publisher, b.url, is_mock=b.is_mock)
+            extra_parts: list[str] = []
+            if b.is_mock:
+                extra_parts.append(f"[{t('mock_tag', lang)}]")
+            if b.duplicate_of_source_id:
+                extra_parts.append(
+                    f"[Kopya: {b.duplicate_of_source_id}]"
+                    if lang == "tr"
+                    else f"[Duplicate: {b.duplicate_of_source_id}]"
+                )
+            extra_str = (" · " + " ".join(extra_parts)) if extra_parts else ""
+            date_lbl = "Tarih" if lang == "tr" else "Date"
+            lines.append(f"- **[{b.source_id}]** {src_link} · {date_lbl}: {pub_date}{extra_str}")
     lines.append("")
     return "\n".join(lines)

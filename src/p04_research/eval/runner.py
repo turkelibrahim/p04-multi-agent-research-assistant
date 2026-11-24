@@ -207,9 +207,9 @@ def run_benchmark(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="P04 K11 Akademik Değerlendirme Koşucusu")
+    parser = argparse.ArgumentParser(description="Araştırma Asistanı Değerlendirme Koşucusu")
     parser.add_argument("--mode", choices=["offline", "live"], default="offline")
-    parser.add_argument("--output-dir", type=Path, default=Path("docs/eval_output"))
+    parser.add_argument("--output-dir", type=Path, default=Path("data/eval_output"))
     parser.add_argument("--human-scores", type=Path, default=None)
     args = parser.parse_args()
 
