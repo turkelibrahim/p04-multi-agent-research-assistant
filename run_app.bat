@@ -6,4 +6,4 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 set PYTHONPATH=%~dp0src
-".venv\Scripts\python.exe" -m streamlit run "%~dp0app.py"
+".venv\Scripts\python.exe" "%~dp0app.py"

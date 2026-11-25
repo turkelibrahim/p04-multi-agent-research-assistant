@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Araştırma Asistanı</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Sol Geçmiş Kenar Çubuğu -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="brand-row">
+          <button type="button" class="brand-btn" id="brand-home-btn" title="Ana sayfa">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-name">Araştırma Asistanı</span>
+          </button>
+          <button type="button" class="icon-btn mobile-only" id="close-sidebar-btn" aria-label="Menüyü kapat">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <button type="button" class="new-research-btn" id="new-research-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          <span>Yeni Araştırma</span>
+        </button>
+      </div>
+
+      <div class="sidebar-search">
+        <input
+          type="search"
+          id="history-search"
+          class="history-search-input"
+          placeholder="Geçmişte ara..."
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="sidebar-section-label">Geçmiş</div>
+      <div class="history-list" id="history-list" role="list"></div>
+
+      <div class="sidebar-footer">
+        <div class="env-status" id="env-status">
+          <span class="status-dot" id="env-status-dot"></span>
+          <span id="env-status-text">Hazırlanıyor...</span>
+        </div>
+        <button type="button" class="text-btn hidden" id="clear-history-btn">Temizle</button>
+      </div>
+    </aside>
+
+    <!-- Mobil Üst Çubuk -->
+    <header class="mobile-header">
+      <button type="button" class="icon-btn" id="open-sidebar-btn" aria-label="Menüyü aç">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 6h18M3 12h18M3 18h18"/>
+        </svg>
+      </button>
+      <span class="mobile-brand">Araştırma Asistanı</span>
+      <button type="button" class="icon-btn" id="mobile-new-btn" aria-label="Yeni araştırma">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Ana Çalışma Alanı -->
+    <main class="main-area" id="main-area">
+      <!-- 1. Yeni Araştırma Ekranı -->
+      <section class="view view-composer" id="view-composer">
+        <div class="composer-wrap">
+          <h1 class="hero-title">Ne araştırmak istiyorsunuz?</h1>
+          <p class="hero-subtitle">Kaynaklardan doğrulanmış, alıntılı ve derli toplu araştırma raporları.</p>
+
+          <form class="composer-card" id="research-form" novalidate>
+            <textarea
+              id="question-input"
+              class="composer-textarea"
+              rows="4"
+              placeholder="Araştırma sorunuzu yazın... (Örn: Çok ajanlı yapay zekâ sistemleri tek ajanlı sistemlere kıyasla doğruluk ve maliyet açısından nasıl performans gösterir?)"
+            ></textarea>
+
+            <div class="composer-toolbar">
+              <div class="composer-controls">
+                <div class="seg-group" data-control="mode" role="radiogroup" aria-label="Çalışma Modu">
+                  <button type="button" class="seg-btn" data-value="live">Canlı Web</button>
+                  <button type="button" class="seg-btn" data-value="demo">Demo</button>
+                </div>
+                <div class="seg-group" data-control="depth" role="radiogroup" aria-label="Derinlik">
+                  <button type="button" class="seg-btn is-active" data-value="standard">Standart</button>
+                  <button type="button" class="seg-btn" data-value="fast">Hızlı</button>
+                </div>
+                <div class="seg-group" data-control="language" role="radiogroup" aria-label="Dil">
+                  <button type="button" class="seg-btn is-active" data-value="tr">TR</button>
+                  <button type="button" class="seg-btn" data-value="en">EN</button>
+                </div>
+              </div>
+
+              <button type="submit" class="submit-btn" id="submit-btn">
+                <span>Araştır</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M5 12h14M13 5l7 7-7 7"/>
+                </svg>
+              </button>
+            </div>
+          </form>
+
+          <div class="inline-alert hidden" id="form-error" role="alert"></div>
+          <p class="mode-hint" id="mode-hint"></p>
+
+          <div class="presets-block" id="presets-block">
+            <div class="presets-label">Örnek sorularla dene</div>
+            <div class="presets-grid" id="presets-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Canlı Araştırma İlerleme Ekranı -->
+      <section class="view view-running hidden" id="view-running">
+        <div class="content-container">
+          <div class="running-header">
+            <span class="running-kicker">Araştırma yürütülüyor</span>
+            <h2 class="running-question" id="running-question"></h2>
+          </div>
+          <div class="progress-rail" aria-hidden="true">
+            <div class="progress-rail-bar"></div>
+          </div>
+          <ol class="live-steps" id="live-steps"></ol>
+        </div>
+      </section>
+
+      <!-- 3. Rapor Çalışma Ekranı -->
+      <section class="view view-report hidden" id="view-report">
+        <div class="content-container">
+          <div class="report-header">
+            <h1 class="report-title" id="report-title"></h1>
+            <div class="report-subrow">
+              <div class="report-meta" id="report-meta"></div>
+              <div class="report-actions">
+                <a class="action-btn" id="dl-md-btn" href="#" download>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                  </svg>
+                  <span>Markdown</span>
+                </a>
+                <a class="action-btn" id="dl-pdf-btn" href="#" download>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                  </svg>
+                  <span>PDF</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="inline-alert hidden" id="report-notice" role="alert"></div>
+
+          <nav class="tab-bar" role="tablist" aria-label="Rapor görünümleri">
+            <button type="button" class="tab-btn is-active" role="tab" data-tab="report" aria-selected="true">
+              Rapor
+            </button>
+            <button type="button" class="tab-btn" role="tab" data-tab="sources" aria-selected="false">
+              Kaynaklar <span class="tab-count" id="tab-sources-count">0</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" data-tab="process" aria-selected="false">
+              Süreç
+            </button>
+          </nav>
+
+          <!-- Sekme 1: Rapor -->
+          <div class="tab-panel" id="panel-report">
+            <section class="report-section">
+              <h2 class="section-heading" id="heading-summary">Kısa Yanıt</h2>
+              <div class="summary-card" id="report-summary"></div>
+            </section>
+
+            <section class="report-section">
+              <h2 class="section-heading" id="heading-findings">Temel Bulgular</h2>
+              <div class="findings-list" id="report-findings"></div>
+            </section>
+
+            <section class="report-section hidden" id="section-conflicts">
+              <h2 class="section-heading" id="heading-conflicts">Çelişen Kaynaklar</h2>
+              <div class="conflicts-list" id="report-conflicts"></div>
+            </section>
+
+            <section class="report-section">
+              <h2 class="section-heading" id="heading-sources">Kaynaklar</h2>
+              <ol class="bib-list" id="report-bibliography"></ol>
+            </section>
+
+            <details class="audit-details" id="audit-details">
+              <summary>Denetim Detayları ve Alt Sorular</summary>
+              <div class="audit-body" id="audit-body"></div>
+            </details>
+          </div>
+
+          <!-- Sekme 2: Kaynaklar ve Kanıt Zinciri -->
+          <div class="tab-panel hidden" id="panel-sources">
+            <section class="report-section">
+              <h2 class="section-heading">Kayıtlı Kaynaklar</h2>
+              <div class="source-cards" id="source-cards"></div>
+            </section>
+
+            <section class="report-section hidden" id="section-provenance">
+              <h2 class="section-heading">İddia Denetim Zinciri</h2>
+              <select class="claim-select" id="claim-select" aria-label="İncelenecek iddia"></select>
+              <div class="provenance-grid" id="provenance-detail"></div>
+            </section>
+          </div>
+
+          <!-- Sekme 3: Süreç -->
+          <div class="tab-panel hidden" id="panel-process">
+            <div class="stats-grid" id="process-stats"></div>
+            <div class="followup-banners" id="process-followups"></div>
+            <h2 class="section-heading">Adım Akışı</h2>
+            <ol class="timeline-list" id="process-timeline"></ol>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

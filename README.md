@@ -1,6 +1,6 @@
 # Çok Ajanlı Araştırma Asistanı
 
-Türkçe veya İngilizce bir araştırma sorusunu alt sorulara bölen, web kaynaklarından kanıt toplayan, iddiaları birebir alıntılarla doğrulayan ve tüm geçmişi SQLite üzerinde saklayarak Markdown / PDF rapor üreten yerel araştırma uygulamasıdır.
+Türkçe veya İngilizce araştırma sorularını alt sorulara bölen, web kaynaklarından kanıt toplayan, iddiaları birebir alıntılarla doğrulayan ve tüm geçmişi SQLite üzerinde saklayarak Markdown / PDF rapor üreten yerel web uygulamasıdır.
 
 ## Kurulum ve Başlatma (Windows)
 
@@ -13,10 +13,10 @@ Uygulamayı başlatmak için `run_app.bat` dosyasına çift tıklayın veya term
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe app.py
 ```
 
-Çevrimdışı demo modu internet ve API anahtarı olmadan çalışır.
+Uygulama `http://127.0.0.1:8000` adresinde açılır. Çevrimdışı demo modu internet ve API anahtarı olmadan çalışır.
 
 ## Canlı Web Araştırması (.env)
 
