@@ -39,6 +39,7 @@ class AppConfig:
 
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
+    openai_base_url: str | None = None
     tavily_api_key: str | None = None
     max_model_calls: int = 10
     max_search_calls_fast: int = 1
@@ -108,6 +109,7 @@ def load_config(
     return AppConfig(
         openai_api_key=get_val("OPENAI_API_KEY"),
         openai_model=get_val("OPENAI_MODEL", "gpt-4.1-mini") or "gpt-4.1-mini",
+        openai_base_url=get_val("OPENAI_BASE_URL"),
         tavily_api_key=get_val("TAVILY_API_KEY"),
         max_model_calls=_parse_int(get_val("MAX_MODEL_CALLS"), 10),
         max_search_calls_fast=_parse_int(get_val("MAX_SEARCH_CALLS_FAST"), 1),

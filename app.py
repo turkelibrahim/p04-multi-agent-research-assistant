@@ -367,6 +367,9 @@ def _serialize_bundle(
             "token_measurement_type": m.token_measurement_type,
             "estimated_cost_usd": m.estimated_cost_usd,
             "source_count": len(bundle.sources),
+            "used_local_fallback": bool(
+                m.mode.value == "live" and m.token_measurement_type == "estimated"
+            ),
         },
         "report": report_out,
         "sources": sources_out,

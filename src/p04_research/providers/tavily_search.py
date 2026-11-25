@@ -44,7 +44,7 @@ class TavilySearchProvider:
                 retryable=False,
             )
 
-        payload = {
+        payload: dict = {
             "api_key": self.config.tavily_api_key,
             "query": query,
             "search_depth": "advanced" if depth == "standard" else "basic",
@@ -52,6 +52,8 @@ class TavilySearchProvider:
             "include_raw_content": False,
             "include_answer": False,
         }
+        if depth == "standard":
+            payload["chunks_per_source"] = 3
 
         attempts = 0
         max_attempts = 2

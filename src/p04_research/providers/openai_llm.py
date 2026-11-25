@@ -41,11 +41,14 @@ class OpenAILLMProvider:
                 "OPENAI_API_KEY tanımlı değil. Canlı araştırma için .env dosyasına geçerli anahtar ekleyin.",
                 retryable=False,
             )
-        self._client = openai.OpenAI(
-            api_key=self.config.openai_api_key,
-            timeout=float(self.config.model_timeout_sec),
-            max_retries=0,  # Tekrar bütçesini P04 yönlendiricisi ve adaptör kendisi denetler
-        )
+        client_kwargs: dict = {
+            "api_key": self.config.openai_api_key,
+            "timeout": float(self.config.model_timeout_sec),
+            "max_retries": 0,  # Tekrar bütçesini P04 yönlendiricisi ve adaptör kendisi denetler
+        }
+        if self.config.openai_base_url:
+            client_kwargs["base_url"] = self.config.openai_base_url
+        self._client = openai.OpenAI(**client_kwargs)
         return self._client
 
     def _parse_structured(

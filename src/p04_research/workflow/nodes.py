@@ -307,6 +307,35 @@ def make_nodes(
             s.content_fingerprint: s for s in sources if s.content_fingerprint
         }
 
+        def _title_key_tokens(raw_title: str) -> set[str]:
+            clean_t = re.split(r"\s+[|\-—]\s+", raw_title or "", maxsplit=1)[0]
+            clean_t = re.sub(r"\.\.\.$", "", clean_t).strip()
+            folded = clean_t.translate(str.maketrans("çğıİöşüÇĞÖŞÜ", "cgiiosucgosu")).lower()
+            words = re.findall(r"[a-z0-9]+", folded)
+            return {w for w in words if len(w) >= 3 or w.isdigit()}
+
+        def _find_title_duplicate(raw_title: str, excerpt_text: str) -> str | None:
+            cand_toks = _title_key_tokens(raw_title)
+            if len(cand_toks) < 3:
+                return None
+            cand_nums = {w for w in cand_toks if w.isdigit()}
+            for prev in sources:
+                if prev.is_mock or not prev.is_accessible or prev.duplicate_of_source_id:
+                    continue
+                prev_toks = _title_key_tokens(prev.title)
+                if len(prev_toks) < 3:
+                    continue
+                prev_nums = {w for w in prev_toks if w.isdigit()}
+                if cand_nums != prev_nums:
+                    continue
+                inter = len(cand_toks & prev_toks)
+                min_len = min(len(cand_toks), len(prev_toks))
+                jaccard = inter / len(cand_toks | prev_toks)
+                if jaccard >= 0.82 or (min_len >= 4 and inter == min_len):
+                    return prev.source_id
+            del excerpt_text
+            return None
+
         tech_error_type: str | None = None
         tech_error_msg: str | None = None
         new_sources_count = 0
@@ -359,6 +388,8 @@ def make_nodes(
                         dup_of: str | None = None
                         if fp and fp in fp_to_source and eval_info["is_accessible"]:
                             dup_of = fp_to_source[fp].source_id
+                        elif not item.is_mock and eval_info["is_accessible"]:
+                            dup_of = _find_title_duplicate(item.title, excerpt)
                         sid = f"S{len(sources) + 1}"
                         src = SourceRecord(
                             source_id=sid,
@@ -883,13 +914,23 @@ def make_nodes(
         )
         if referenced_sids:
             bib_sources = [
-                s for s in state["sources"] if s.is_mock or s.source_id in referenced_sids
+                s
+                for s in state["sources"]
+                if s.is_mock
+                or (
+                    s.source_id in referenced_sids
+                    and not (
+                        s.duplicate_of_source_id is not None
+                        and s.duplicate_of_source_id in referenced_sids
+                    )
+                )
             ]
         else:
             bib_sources = [
                 s
                 for s in state["sources"]
-                if s.is_mock or (s.is_accessible and s.relevance_score >= 0.2)
+                if s.is_mock
+                or (s.is_accessible and s.relevance_score >= 0.2 and s.duplicate_of_source_id is None)
             ]
             bib_sources.sort(key=lambda s: (-s.relevance_score, -s.credibility_score))
             bib_sources = bib_sources[:3]

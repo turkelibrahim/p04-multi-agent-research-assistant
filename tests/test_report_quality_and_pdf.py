@@ -143,11 +143,11 @@ def test_pdf_long_title_long_url_empty_table_and_multipage(app_config):
     assert "Kapsamlı İnceleme" in txt_empty
     assert "Sayfa 1" in txt_empty
 
-    # 2) Çok sayfalı ve çok uzun URL'li rapor (14 kaynak)
+    # 2) Çok sayfalı ve çok uzun URL'li rapor (22 kaynak)
     class ManySourcesSearch:
         def search(self, query, max_results, depth):
             items = []
-            for i in range(1, 15):
+            for i in range(1, 23):
                 long_url = f"https://akademik.kurum{i}.edu.tr/yayinlar/2026/yapay-zeka-ajanlari-ve-kurumsal-verimlilik-arastirmasi-bolum-{i}-ek-dosyalar-cok-uzun-adres"
                 items.append(
                     RawSearchItem(
@@ -168,7 +168,7 @@ def test_pdf_long_title_long_url_empty_table_and_multipage(app_config):
                 )
             return SearchResponse(query=query, items=items[:max_results], search_calls=1)
 
-    app_config.max_results_per_query = 14
+    app_config.max_results_per_query = 22
     bundle_many, _, _ = execute_research_run(
         question="2026 yılında yapay zekâ ajanlarının kurumsal süreç süresine etkisi nedir?",
         language="tr",
@@ -288,3 +288,104 @@ def test_publisher_tlds_markdown_cleanup_abbreviations_and_multiagent_planner():
     # 5) Aynı cümle bulgu + alıntı olarak çift yazılmamalı
     stmt = "Artık tüm görevleri tek bir büyük yapay zekâ modelinin üstlenmesine güvenmek yerine ekipler uzman ajanlar kullanıyor."
     assert is_statement_duplicate_of_quote(stmt, stmt) is True
+
+
+def test_conversational_typo_prompt_rejects_classroom_noise_and_deduplicates_mirrors(app_config):
+    from p04_research.export.markdown_export import clean_report_title, clean_source_title
+
+    raw_prompt = "bana git öğrencılerın siber guvenlık hakkında eksıklıklerını bul ve bunu daha da nasıl gelışıtıırız eksıklıklerını"
+
+    # 1) Başlıktaki "bana git" ve yazım hataları temizlenmeli
+    polished_title = clean_report_title(raw_prompt)
+    assert not polished_title.lower().startswith("bana")
+    assert "git" not in polished_title.lower().split()
+    assert "siber güvenlik" in polished_title.lower()
+    assert clean_source_title("Siber Güvenlik Gerçekleri - Blog", "Cube Incubation") == "Siber Güvenlik Gerçekleri"
+
+    # 2) Arama sorguları "bana git" içermemeli
+    ext = ExtractiveLiveLLMProvider()
+    plan, _ = ext.plan(raw_prompt, "tr", "standard", 3)
+    assert all("bana" not in q.lower() and "git" not in q.lower().split() for q in plan.initial_queries)
+
+    # 3) Ders yönergesi, sudo git clone, menü ve kopya PDF/makaleler elenip gerçek bulgu + çözüm seçilmeli
+    class NoisyCyberSearch:
+        def search(self, query, max_results, depth):
+            return SearchResponse(
+                query=query,
+                items=[
+                    RawSearchItem(
+                        url="https://cdn.deneyap.org/siber.pdf",
+                        title="SİBER GÜVENLİK",
+                        publisher="cdn.deneyap.org",
+                        content=(
+                            "Bölümün başında öğrencilerin gruplara ayrılıp aşağıdaki sorular hakkında tartışma yürütmeleri sağlanır. "
+                            "2. Kali Linux terminal ekranında aşağıdaki komutu çalıştırınız: sudo git clone"
+                        ),
+                        provider="mock_live",
+                        is_mock=False,
+                    ),
+                    RawSearchItem(
+                        url="https://tubitak.gov.tr/siber.pdf",
+                        title="SİBER GÜVENLİK - TÜBİTAK",
+                        publisher="tubitak.gov.tr",
+                        content=(
+                            "Bölümün başında öğrencilerin gruplara ayrılıp aşağıdaki sorular hakkında tartışma yürütmeleri sağlanır. "
+                            "2. Kali Linux terminal ekranında aşağıdaki komutu çalıştırınız: sudo git clone"
+                        ),
+                        provider="mock_live",
+                        is_mock=False,
+                    ),
+                    RawSearchItem(
+                        url="https://dergipark.org.tr/tr/pub/mjss/article/1711819",
+                        title="Öğrencilerin Siber Güvenlik Farkındalığına İlişkin Meta-Sentez Çalışması - MANAS Dergisi",
+                        publisher="dergipark.org.tr",
+                        content=(
+                            "Bu çalışma, öğrencilerin siber güvenlik konusundaki mevcut farkındalık düzeylerini değerlendirmeyi amaçlamaktadır. "
+                            "Bulgular, öğrencilerin farkındalık düzeylerinin genel olarak düşük olduğunu, sahip olunan bilgi düzeylerinin ise güvenli siber davranışlara dönüşemediğini ortaya koymaktadır. "
+                            "Sosyal mühendislik, kimlik avı ve parola güvenliği gibi temel konularda bilgi ve uygulama eksiklikleri dikkat çekmektedir."
+                        ),
+                        provider="mock_live",
+                        is_mock=False,
+                    ),
+                    RawSearchItem(
+                        url="https://acikerisim.bandirma.edu.tr/yayin/1816971",
+                        title="Öğrencilerin Siber Güvenlik Farkındalığına İlişkin Meta-Sentez Çalışması",
+                        publisher="acikerisim.bandirma.edu.tr",
+                        content=(
+                            "Öğrencilerin yaş, cinsiyet, deneyim ve kültürel bağlam gibi demografik faktörlerin siber güvenlik farkındalığını etkilediği gözlemlenmiştir."
+                        ),
+                        provider="mock_live",
+                        is_mock=False,
+                    ),
+                    RawSearchItem(
+                        url="https://mjer.inased.org/makale/1087",
+                        title="Üniversite Öğrencilerinde Siber Güvenlik Eğitimi ve Çözüm Önerileri",
+                        publisher="mjer.inased.org",
+                        content=(
+                            "Kurumlar öğrencilerin siber güvenlik eksikliğini gidermek için uygulamalı siber güvenlik eğitimlerini, atölye çalışmalarını ve müfredat desteğini artırmalıdır."
+                        ),
+                        provider="mock_live",
+                        is_mock=False,
+                    ),
+                ],
+                search_calls=1,
+            )
+
+    bundle, _, _ = execute_research_run(
+        question=raw_prompt,
+        language="tr",
+        depth="fast",
+        mode="live",
+        config=app_config,
+        llm_provider=ExtractiveLiveLLMProvider(),
+        search_provider=NoisyCyberSearch(),
+    )
+    findings_text = " ".join(f.statement for f in bundle.report.supported_findings)
+    assert "gruplara ayrılıp" not in findings_text
+    assert "sudo git clone" not in findings_text
+    assert "amaçlamaktadır" not in findings_text
+    assert "farkındalık düzeylerinin genel olarak düşük" in findings_text or "parola güvenliği" in findings_text
+    assert "uygulamalı siber güvenlik eğitimlerini" in findings_text
+    # Kopya makale (Bandırma) DergiPark ile birleştirildiği için kaynakçada çiftlenmemeli
+    bib_pubs = [b.publisher for b in bundle.report.bibliography]
+    assert "acikerisim.bandirma.edu.tr" not in bib_pubs

@@ -53,6 +53,17 @@ _PUBLISHER_BRAND_MAP: dict[str, str] = {
     "gartner.com": "Gartner",
     "mckinsey.com": "McKinsey",
     "deloitte.com": "Deloitte",
+    "dergipark.org.tr": "DergiPark",
+    "search.trdizin.gov.tr": "TR Dizin",
+    "trdizin.gov.tr": "TR Dizin",
+    "tubitak.gov.tr": "TÜBİTAK",
+    "cdn.deneyap.org": "Deneyap",
+    "deneyap.org": "Deneyap",
+    "cubeincubation.com": "Cube Incubation",
+    "acikerisim.bandirma.edu.tr": "Bandırma Onyedi Eylül Üniv.",
+    "bandirma.edu.tr": "Bandırma Onyedi Eylül Üniv.",
+    "mjer.inased.org": "MJER",
+    "inased.org": "INASED",
 }
 
 _BRAND_TOKEN_CASING: dict[str, str] = {
@@ -74,6 +85,10 @@ _BRAND_TOKEN_CASING: dict[str, str] = {
     "nvidia": "NVIDIA",
     "linkedin": "LinkedIn",
     "youtube": "YouTube",
+    "dergipark": "DergiPark",
+    "tubitak": "TÜBİTAK",
+    "trdizin": "TR Dizin",
+    "deneyap": "Deneyap",
 }
 
 _MULTI_PART_TLDS = (
@@ -152,7 +167,11 @@ def clean_publisher_name(publisher: str, title: str = "", url: str = "") -> str:
                 break
         if not matched_multi and "." in dom:
             dom = dom.rsplit(".", 1)[0]
-        parts = [p for p in dom.split(".") if p and p not in ("www", "m", "blog", "news", "docs", "tr", "en")]
+        parts = [
+            p
+            for p in dom.split(".")
+            if p and p not in ("www", "m", "blog", "news", "docs", "tr", "en", "cdn", "search", "acikerisim")
+        ]
         main_token = parts[-1] if parts else dom.split(".")[-1]
         if main_token:
             low_tok = main_token.lower()
@@ -164,7 +183,7 @@ def clean_publisher_name(publisher: str, title: str = "", url: str = "") -> str:
 
 
 def clean_source_title(title: str, publisher_label: str = "") -> str:
-    """Başlıktaki yönlü görünmez karakterleri, ham URL'leri ve tekrarlayan yayıncı eklerini temizler."""
+    """Başlıktaki yönlü görünmez karakterleri, ham URL'leri ve tekrarlayan yayıncı/blog eklerini temizler."""
     cleaned = _strip_noise(title)
     if not cleaned or cleaned.lower().startswith(("http://", "https://")):
         return publisher_label or "Kaynak"
@@ -179,6 +198,9 @@ def clean_source_title(title: str, publisher_label: str = "") -> str:
                     if head.strip():
                         cleaned = head.strip()
                         break
+
+    cleaned = re.sub(r"\s*[-|—·]\s*(?:Blog|Haber|Makale|Yazı)\s*$", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s*\.\.\.\s*$", "", cleaned).strip()
     return cleaned
 
 
@@ -242,12 +264,55 @@ def _format_token_summary(bundle: RunBundle) -> str:
     return f"{m.total_tokens}{cost_part}"
 
 
+_CONVERSATIONAL_LEAD_RE = re.compile(
+    r"^(?:(?:lütfen|lutfen)\s+)?(?:bana\s+)?(?:git\s+)?(?:bana\s+)?(?:şunu\s+|sunu\s+|bunu\s+)?",
+    re.IGNORECASE,
+)
+
+_COMMON_TR_TYPO_MAP: tuple[tuple[str, str], ...] = (
+    (r"\böğrencılerın\b|\bogrencilerin\b|\boğrencılerın\b|\böğrencılerı\b", "öğrencilerin"),
+    (r"\böğrencıler\b|\bogrenciler\b", "öğrenciler"),
+    (r"\bguvenlık\b|\bguvenlik\b|\bgüvenlık\b", "güvenlik"),
+    (r"\beksıklıklerını\b|\beksikliklerini\b|\beksıklıklerı\b|\beksıklık\b", "eksiklikleri"),
+    (r"\bgelışıtıırız\b|\bgelıstırırız\b|\bgelistiririz\b|\bgelıştırırız\b|\bgelıstırebılırız\b", "geliştirilebilir"),
+    (r"\bfarkindalik\b|\bfarkındalık\b", "farkındalık"),
+    (r"\barastirma\b|\baraştırma\b", "araştırma"),
+    (r"\bhakkinda\b|\bhakkında\b", "hakkında"),
+    (r"\bcozum\b", "çözüm"),
+    (r"\boneri\b", "öneri"),
+    (r"\begitim\b", "eğitim"),
+)
+
+
+def normalize_tr_typos(text: str) -> str:
+    """Sık görülen Türkçe hızlı yazım ve noktalı/noktasız 'ı/i' hatalarını yumuşakça düzeltir."""
+    out = _strip_noise(text)
+    for pat, repl in _COMMON_TR_TYPO_MAP:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    return _WS_RE.sub(" ", out).strip()
+
+
 def clean_report_title(title: str) -> str:
-    """Rapor başlığındaki gereksiz önekleri temizler; çok cümleli uzun istemlerde ilk ana soruyu alır."""
+    """Rapor başlığındaki gereksiz önekleri ve konuşma emirlerini temizler; çok cümleli uzun istemlerde ilk ana soruyu alır."""
     cleaned = _strip_noise(title)
     for prefix in ("Araştırma Raporu:", "Research Report:"):
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
+
+    # "bana git ..." gibi konuşma dili komut öneklerini başlıktan arındır
+    stripped_lead = _CONVERSATIONAL_LEAD_RE.sub("", cleaned).strip()
+    if stripped_lead and stripped_lead != cleaned and len(stripped_lead) >= 12:
+        cleaned = normalize_tr_typos(stripped_lead)
+        # "bul ve bunu daha da nasıl ..." gibi tekrarlı/komut sözlerini sadeleştir
+        cleaned = re.sub(r"\bbul\s+ve\s+", "ve ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bbunu\s+daha\s+da\s+", "", cleaned, flags=re.IGNORECASE)
+        # Sonda tekrarlanan aynı kelimeyi kaldır (örn. "... eksiklikleri ... eksiklikleri")
+        words = cleaned.split()
+        if len(words) >= 4 and words[-1].lower() in {w.lower() for w in words[:-1]}:
+            words.pop()
+            cleaned = " ".join(words)
+        cleaned = cleaned[:1].upper() + cleaned[1:]
+
     if len(cleaned) > 120:
         parts = _SENTENCE_SPLIT_TITLE_RE.split(cleaned, maxsplit=1)
         if len(parts) > 1 and len(parts[0].strip()) >= 25:

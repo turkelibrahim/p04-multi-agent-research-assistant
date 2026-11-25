@@ -43,11 +43,25 @@ _INACCESSIBLE_MARKERS = (
 )
 
 _STOPWORDS = {
-    "ve", "ile", "bir", "bu", "şu", "o", "mi", "mı", "mu", "mü", "ne", "nasıl",
-    "neden", "hangi", "kaç", "gibi", "için", "olarak", "daha", "çok", "en", "da", "de",
+    "ve", "ile", "bir", "bu", "su", "o", "mi", "mi", "mu", "ne", "nasil",
+    "neden", "hangi", "kac", "gibi", "icin", "olarak", "daha", "cok", "en", "da", "de",
+    "bana", "git", "bul", "arastir", "getir", "soyle", "anlat", "yaz", "ver", "bunu",
+    "sunu", "hakkinda", "konusunda", "lutfen", "kadar", "uzerine", "ilgili", "olan",
+    "olur", "yapar", "yapilir", "yuzden", "gore", "sonra", "once", "kendi",
     "the", "and", "for", "with", "that", "this", "what", "how", "why", "which", "are",
-    "can", "will", "from", "into", "about", "yılında", "etkisi", "nedir", "nelerdir",
+    "can", "will", "from", "into", "about", "yilinda", "etkisi", "nedir", "nelerdir",
 }
+
+_TR_ASCII_TABLE = str.maketrans(
+    "çğıİöşüÇĞÖŞÜ",
+    "cgiiosucgosu",
+)
+
+
+def _fold_tr_ascii(text: str) -> str:
+    """Türkçe karakterleri ve noktalı/noktasız 'ı/i' yazım farklarını eşleştirme için katlar."""
+    nfc = unicodedata.normalize("NFC", text or "")
+    return nfc.translate(_TR_ASCII_TABLE).lower()
 
 _INTERROGATIVE_HINTS = (
     "kaç ", "nasıl ", "neden ", "hangi ", "kimler ", "ne kadar ",
@@ -192,8 +206,23 @@ def classify_source_type(
         return SourceType.VIDEO_SOCIAL_MEDIA
 
     if any(host.endswith(suf) for suf in (".edu", ".edu.tr", ".ac.uk")) or any(
-        d in host for d in ("arxiv.org", "scholar.google", "pubmed", "sciencedirect", "springer", "ieee", "aclanthology", "nature.com", "science.org")
-    ) or any(k in combined for k in ("peer-reviewed", "hakemli", "doi:", "journal of", "randomized cohort", "dergisi")):
+        d in host
+        for d in (
+            "arxiv.org",
+            "scholar.google",
+            "pubmed",
+            "sciencedirect",
+            "springer",
+            "ieee",
+            "aclanthology",
+            "nature.com",
+            "science.org",
+            "dergipark.org.tr",
+            "trdizin.gov.tr",
+            "acikerisim.",
+            "inased.org",
+        )
+    ) or any(k in combined for k in ("peer-reviewed", "hakemli", "doi:", "journal of", "randomized cohort", "dergisi", "meta-sentez")):
         return SourceType.ACADEMIC_PEER_REVIEWED
 
     if any(host.endswith(suf) for suf in (".gov", ".gov.tr", ".europa.eu")) or any(
@@ -221,8 +250,8 @@ def classify_source_type(
 
 
 def _content_tokens(text: str) -> set[str]:
-    nfc = unicodedata.normalize("NFC", text or "").lower()
-    words = _PUNCT_STRIP_RE.sub(" ", nfc).split()
+    folded = _fold_tr_ascii(text or "")
+    words = _PUNCT_STRIP_RE.sub(" ", folded).split()
     tokens: set[str] = set()
     for w in words:
         if len(w) >= 3 and w not in _STOPWORDS:

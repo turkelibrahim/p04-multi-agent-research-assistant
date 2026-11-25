@@ -277,7 +277,11 @@ function renderBundle(bundle) {
   const demoPill =
     m.mode === "demo"
       ? `<span class="pill pill-demo">${isEn ? "Sample Data" : "Örnek Veri"}</span>`
-      : "";
+      : m.used_local_fallback
+        ? `<span class="pill" title="OpenAI API kotası yetersiz olduğu için yerel kanıt çıkarıcı kullanıldı">${
+            isEn ? "Local Extractive Mode" : "Yerel Özet Modu"
+          }</span>`
+        : "";
   els.reportMeta.innerHTML = `
     <span>${findingCount} ${isEn ? "findings" : "bulgu"}</span>
     <span>·</span>
