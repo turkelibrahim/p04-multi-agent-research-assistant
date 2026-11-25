@@ -12,7 +12,6 @@ import re
 import tiktoken
 
 from p04_research.config import AppConfig
-from p04_research.export.markdown_export import clean_report_title, normalize_tr_typos
 from p04_research.models import (
     AnalystOutput,
     ClaimRecord,
@@ -38,7 +37,9 @@ from p04_research.providers.mock_demo import clean_question_title
 from p04_research.providers.openai_llm import OpenAILLMProvider
 from p04_research.verification_rules import (
     _fold_tr_ascii,
+    clean_report_title,
     compute_topical_relevance,
+    normalize_tr_typos,
     normalize_whitespace_nfc,
 )
 

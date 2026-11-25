@@ -8,6 +8,7 @@ from p04_research.export.markdown_export import (
     format_source_markdown_link,
     is_external_web_url,
     is_statement_duplicate_of_quote,
+    normalize_tr_typos,
     render_report_markdown,
 )
 from p04_research.export.pdf_export import register_turkish_font_family, render_report_pdf_bytes
@@ -20,6 +21,7 @@ __all__ = [
     "format_source_markdown_link",
     "is_external_web_url",
     "is_statement_duplicate_of_quote",
+    "normalize_tr_typos",
     "register_turkish_font_family",
     "render_report_markdown",
     "render_report_pdf_bytes",

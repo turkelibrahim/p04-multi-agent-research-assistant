@@ -56,12 +56,64 @@ _TR_ASCII_TABLE = str.maketrans(
     "çğıİöşüÇĞÖŞÜ",
     "cgiiosucgosu",
 )
+_BIDI_STRIP_RE = re.compile(r"[\u200b\u200e\u200f\u202a-\u202e\ufeff]")
+_SENTENCE_SPLIT_TITLE_RE = re.compile(r"(?<=[?!.])\s+")
+_CONVERSATIONAL_LEAD_RE = re.compile(
+    r"^(?:(?:lütfen|lutfen)\s+)?(?:bana\s+)?(?:git\s+)?(?:bana\s+)?(?:şunu\s+|sunu\s+|bunu\s+)?",
+    re.IGNORECASE,
+)
+_COMMON_TR_TYPO_MAP: tuple[tuple[str, str], ...] = (
+    (r"\böğrencılerın\b|\bogrencilerin\b|\boğrencılerın\b|\böğrencılerı\b", "öğrencilerin"),
+    (r"\böğrencıler\b|\bogrenciler\b", "öğrenciler"),
+    (r"\bguvenlık\b|\bguvenlik\b|\bgüvenlık\b", "güvenlik"),
+    (r"\beksıklıklerını\b|\beksikliklerini\b|\beksıklıklerı\b|\beksıklık\b", "eksiklikleri"),
+    (r"\bgelışıtıırız\b|\bgelıstırırız\b|\bgelistiririz\b|\bgelıştırırız\b|\bgelıstırebılırız\b", "geliştirilebilir"),
+    (r"\bfarkindalik\b|\bfarkındalık\b", "farkındalık"),
+    (r"\barastirma\b|\baraştırma\b", "araştırma"),
+    (r"\bhakkinda\b|\bhakkında\b", "hakkında"),
+    (r"\bcozum\b", "çözüm"),
+    (r"\boneri\b", "öneri"),
+    (r"\begitim\b", "eğitim"),
+)
 
 
 def _fold_tr_ascii(text: str) -> str:
     """Türkçe karakterleri ve noktalı/noktasız 'ı/i' yazım farklarını eşleştirme için katlar."""
     nfc = unicodedata.normalize("NFC", text or "")
     return nfc.translate(_TR_ASCII_TABLE).lower()
+
+
+def normalize_tr_typos(text: str) -> str:
+    """Sık görülen Türkçe hızlı yazım ve noktalı/noktasız 'ı/i' hatalarını yumuşakça düzeltir."""
+    out = _WHITESPACE_RE.sub(" ", _BIDI_STRIP_RE.sub("", text or "")).strip()
+    for pat, repl in _COMMON_TR_TYPO_MAP:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    return _WHITESPACE_RE.sub(" ", out).strip()
+
+
+def clean_report_title(title: str) -> str:
+    """Rapor başlığındaki gereksiz önekleri ve konuşma emirlerini temizler; çok cümleli uzun istemlerde ilk ana soruyu alır."""
+    cleaned = _WHITESPACE_RE.sub(" ", _BIDI_STRIP_RE.sub("", title or "")).strip()
+    for prefix in ("Araştırma Raporu:", "Research Report:"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+
+    stripped_lead = _CONVERSATIONAL_LEAD_RE.sub("", cleaned).strip()
+    if stripped_lead and stripped_lead != cleaned and len(stripped_lead) >= 12:
+        cleaned = normalize_tr_typos(stripped_lead)
+        cleaned = re.sub(r"\bbul\s+ve\s+", "ve ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bbunu\s+daha\s+da\s+", "", cleaned, flags=re.IGNORECASE)
+        words = cleaned.split()
+        if len(words) >= 4 and words[-1].lower() in {w.lower() for w in words[:-1]}:
+            words.pop()
+            cleaned = " ".join(words)
+        cleaned = cleaned[:1].upper() + cleaned[1:]
+
+    if len(cleaned) > 120:
+        parts = _SENTENCE_SPLIT_TITLE_RE.split(cleaned, maxsplit=1)
+        if len(parts) > 1 and len(parts[0].strip()) >= 25:
+            return parts[0].strip()
+    return cleaned
 
 _INTERROGATIVE_HINTS = (
     "kaç ", "nasıl ", "neden ", "hangi ", "kimler ", "ne kadar ",

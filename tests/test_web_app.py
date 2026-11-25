@@ -97,3 +97,20 @@ def test_web_app_full_lifecycle_validation_stream_export_and_delete(tmp_path, mo
     r_del = client.delete(f"/api/runs/{run_id}")
     assert r_del.status_code == 200
     assert repo.list_runs() == []
+
+
+def test_app_cold_import_has_no_circular_import():
+    import os
+    import subprocess
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT_DIR / "src")
+    res = subprocess.run(
+        [sys.executable, "-c", "import app; assert app.app is not None"],
+        cwd=str(ROOT_DIR),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr

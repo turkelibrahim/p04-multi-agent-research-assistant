@@ -6,6 +6,12 @@ import re
 from urllib.parse import urlsplit
 
 from p04_research.models import RunBundle, RunMode
+from p04_research.verification_rules import (
+    clean_report_title as clean_report_title,
+)
+from p04_research.verification_rules import (
+    normalize_tr_typos as normalize_tr_typos,
+)
 from p04_research.workflow.i18n import (
     t,
     verdict_label,
@@ -15,7 +21,6 @@ _BIDI_NOISE_RE = re.compile(r"[\u200b\u200e\u200f\u202a-\u202e\ufeff]")
 _INLINE_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
 _PUNCT_NORM_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
-_SENTENCE_SPLIT_TITLE_RE = re.compile(r"(?<=[?!.])\s+")
 
 _PUBLISHER_BRAND_MAP: dict[str, str] = {
     "pwc.com.tr": "PwC Türkiye",
@@ -262,62 +267,6 @@ def _format_token_summary(bundle: RunBundle) -> str:
         f" (${m.estimated_cost_usd:.5f})" if m.estimated_cost_usd is not None else ""
     )
     return f"{m.total_tokens}{cost_part}"
-
-
-_CONVERSATIONAL_LEAD_RE = re.compile(
-    r"^(?:(?:lütfen|lutfen)\s+)?(?:bana\s+)?(?:git\s+)?(?:bana\s+)?(?:şunu\s+|sunu\s+|bunu\s+)?",
-    re.IGNORECASE,
-)
-
-_COMMON_TR_TYPO_MAP: tuple[tuple[str, str], ...] = (
-    (r"\böğrencılerın\b|\bogrencilerin\b|\boğrencılerın\b|\böğrencılerı\b", "öğrencilerin"),
-    (r"\böğrencıler\b|\bogrenciler\b", "öğrenciler"),
-    (r"\bguvenlık\b|\bguvenlik\b|\bgüvenlık\b", "güvenlik"),
-    (r"\beksıklıklerını\b|\beksikliklerini\b|\beksıklıklerı\b|\beksıklık\b", "eksiklikleri"),
-    (r"\bgelışıtıırız\b|\bgelıstırırız\b|\bgelistiririz\b|\bgelıştırırız\b|\bgelıstırebılırız\b", "geliştirilebilir"),
-    (r"\bfarkindalik\b|\bfarkındalık\b", "farkındalık"),
-    (r"\barastirma\b|\baraştırma\b", "araştırma"),
-    (r"\bhakkinda\b|\bhakkında\b", "hakkında"),
-    (r"\bcozum\b", "çözüm"),
-    (r"\boneri\b", "öneri"),
-    (r"\begitim\b", "eğitim"),
-)
-
-
-def normalize_tr_typos(text: str) -> str:
-    """Sık görülen Türkçe hızlı yazım ve noktalı/noktasız 'ı/i' hatalarını yumuşakça düzeltir."""
-    out = _strip_noise(text)
-    for pat, repl in _COMMON_TR_TYPO_MAP:
-        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
-    return _WS_RE.sub(" ", out).strip()
-
-
-def clean_report_title(title: str) -> str:
-    """Rapor başlığındaki gereksiz önekleri ve konuşma emirlerini temizler; çok cümleli uzun istemlerde ilk ana soruyu alır."""
-    cleaned = _strip_noise(title)
-    for prefix in ("Araştırma Raporu:", "Research Report:"):
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix) :].strip()
-
-    # "bana git ..." gibi konuşma dili komut öneklerini başlıktan arındır
-    stripped_lead = _CONVERSATIONAL_LEAD_RE.sub("", cleaned).strip()
-    if stripped_lead and stripped_lead != cleaned and len(stripped_lead) >= 12:
-        cleaned = normalize_tr_typos(stripped_lead)
-        # "bul ve bunu daha da nasıl ..." gibi tekrarlı/komut sözlerini sadeleştir
-        cleaned = re.sub(r"\bbul\s+ve\s+", "ve ", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\bbunu\s+daha\s+da\s+", "", cleaned, flags=re.IGNORECASE)
-        # Sonda tekrarlanan aynı kelimeyi kaldır (örn. "... eksiklikleri ... eksiklikleri")
-        words = cleaned.split()
-        if len(words) >= 4 and words[-1].lower() in {w.lower() for w in words[:-1]}:
-            words.pop()
-            cleaned = " ".join(words)
-        cleaned = cleaned[:1].upper() + cleaned[1:]
-
-    if len(cleaned) > 120:
-        parts = _SENTENCE_SPLIT_TITLE_RE.split(cleaned, maxsplit=1)
-        if len(parts) > 1 and len(parts[0].strip()) >= 25:
-            return parts[0].strip()
-    return cleaned
 
 
 def render_report_markdown(bundle: RunBundle) -> str:
