@@ -8,8 +8,6 @@ from urllib.parse import urlsplit
 from p04_research.models import RunBundle, RunMode
 from p04_research.verification_rules import (
     clean_report_title as clean_report_title,
-)
-from p04_research.verification_rules import (
     normalize_tr_typos as normalize_tr_typos,
 )
 from p04_research.workflow.i18n import (
